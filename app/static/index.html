@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Attendance Payroll Calculator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Attendance Payroll Calculator</h1>
+  <p class="sub">Configurable per-company rule engine · compute payable days &amp; payroll</p>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="run">Run Payroll</button>
+  <button class="tab" data-tab="config">Rule Config</button>
+  <button class="tab" data-tab="employees">Employees</button>
+  <button class="tab" data-tab="upload">Upload Attendance</button>
+</nav>
+
+<section id="run" class="panel active">
+  <h2>Run Payroll</h2>
+  <div class="row">
+    <label>Location
+      <select id="run-location"></select>
+    </label>
+    <label>Year <input id="run-year" type="number" value="2025" /></label>
+    <label>Month <input id="run-month" type="number" value="1" min="1" max="12" /></label>
+    <button id="run-btn">Run</button>
+    <button id="dl-csv" disabled>Download CSV</button>
+    <button id="dl-xlsx" disabled>Download Excel</button>
+  </div>
+  <div id="run-summary"></div>
+  <table id="run-table"></table>
+  <details><summary>Raw calculation detail</summary><pre id="run-raw"></pre></details>
+</section>
+
+<section id="config" class="panel">
+  <h2>Rule Config</h2>
+  <div class="row">
+    <label>Location
+      <select id="cfg-location"></select>
+    </label>
+    <button id="cfg-reload">Reload</button>
+    <button id="cfg-save">Save</button>
+  </div>
+  <p class="hint">Edit the JSON. All fields are optional — missing fields inherit defaults from the engine.</p>
+  <textarea id="cfg-json" rows="30"></textarea>
+  <details><summary>Default config reference</summary><pre id="cfg-default"></pre></details>
+</section>
+
+<section id="employees" class="panel">
+  <h2>Employees</h2>
+  <div class="row">
+    <label>Location
+      <select id="emp-location"></select>
+    </label>
+    <button id="emp-reload">Reload</button>
+  </div>
+  <table id="emp-table"></table>
+</section>
+
+<section id="upload" class="panel">
+  <h2>Upload Attendance CSV</h2>
+  <p class="hint">CSV columns: <code>emp_code,day,code,worked_on_holiday</code>.
+    Codes: A=Present, B=Half, C=Week Off, D=Holiday, E=Leave, F=Half Leave, G=Absent.</p>
+  <div class="row">
+    <label>Location <select id="up-location"></select></label>
+    <input id="up-file" type="file" accept=".csv" />
+    <button id="up-btn">Upload</button>
+  </div>
+  <pre id="up-result"></pre>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

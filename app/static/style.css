@@ -1,0 +1,39 @@
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+       margin: 0; background: #f6f7f9; color: #1f2937; }
+header { background: #111827; color: #fff; padding: 1rem 1.5rem; }
+header h1 { margin: 0 0 .25rem; font-size: 1.25rem; }
+.sub { margin: 0; color: #9ca3af; font-size: .85rem; }
+
+.tabs { display: flex; gap: .25rem; padding: .5rem 1rem; background: #fff; border-bottom: 1px solid #e5e7eb; }
+.tab { background: transparent; border: 0; padding: .5rem 1rem; cursor: pointer; border-radius: 4px; font-size: .9rem; }
+.tab.active { background: #111827; color: #fff; }
+.tab:not(.active):hover { background: #e5e7eb; }
+
+.panel { display: none; padding: 1rem 1.5rem; max-width: 1280px; }
+.panel.active { display: block; }
+.panel h2 { margin-top: 0; font-size: 1.1rem; }
+
+.row { display: flex; gap: .75rem; align-items: end; flex-wrap: wrap; margin-bottom: 1rem; }
+.row label { display: flex; flex-direction: column; font-size: .8rem; color: #4b5563; gap: .25rem; }
+input, select, textarea, button {
+  font: inherit; padding: .45rem .6rem; border: 1px solid #d1d5db; border-radius: 4px; background: #fff;
+}
+button { background: #2563eb; color: #fff; border-color: #2563eb; cursor: pointer; }
+button:hover { background: #1d4ed8; }
+button:disabled { background: #9ca3af; border-color: #9ca3af; cursor: not-allowed; }
+
+textarea { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: .85rem; }
+
+table { width: 100%; border-collapse: collapse; background: #fff; font-size: .85rem; }
+th, td { padding: .5rem .6rem; border-bottom: 1px solid #e5e7eb; text-align: left; }
+th { background: #f3f4f6; font-weight: 600; }
+tr:hover td { background: #f9fafb; }
+
+.hint { color: #6b7280; font-size: .85rem; }
+pre { background: #0b1220; color: #e5e7eb; padding: 1rem; border-radius: 6px; overflow: auto; font-size: .8rem; }
+
+.flag { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 3px; font-size: .75rem; margin-right: 4px; }
+.note { background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 3px; font-size: .75rem; margin-right: 4px; }
+.check-ok { color: #059669; }
+.check-fail { color: #dc2626; }
