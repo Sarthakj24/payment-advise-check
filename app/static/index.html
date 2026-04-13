@@ -98,8 +98,8 @@
       <label>Code <input name="code" required></label>
       <label>Name <input name="name" required></label>
     </div>
-    <p class="hint">Rule config JSON — any missing keys inherit engine defaults.</p>
-    <textarea name="rule_config" rows="20" style="width:100%"></textarea>
+    <h4 class="cfg-section">Rule configuration</h4>
+    <div id="loc-cfg-form" class="cfg-grid"></div>
     <div class="row">
       <button id="loc-save">Save</button>
       <button id="loc-cancel" class="secondary">Cancel</button>
@@ -119,15 +119,19 @@
 </section>
 
 <section id="config" class="panel">
-  <h2>Rule Config (shortcut)</h2>
-  <p class="hint">Edit per-location JSON here for quick tweaks; same as the form under Locations.</p>
+  <h2>Rule Config</h2>
+  <p class="hint">Left column shows each rule. Right column is editable per location.</p>
   <div class="row">
     <label>Location <select id="cfg-location"></select></label>
     <button id="cfg-reload">Reload</button>
     <button id="cfg-save">Save</button>
   </div>
-  <textarea id="cfg-json" rows="25" style="width:100%"></textarea>
-  <details><summary>Default config reference</summary><pre id="cfg-default"></pre></details>
+  <div id="cfg-form" class="cfg-grid"></div>
+  <details><summary>Default config (reference)</summary><pre id="cfg-default"></pre></details>
+  <details><summary>Raw JSON (advanced)</summary>
+    <textarea id="cfg-json" rows="20" style="width:100%"></textarea>
+    <button id="cfg-save-json" class="secondary">Save JSON</button>
+  </details>
 </section>
 
 <section id="upload" class="panel">

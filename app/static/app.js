@@ -44,19 +44,171 @@ async function loadDefault() {
   $("#cfg-default").textContent = JSON.stringify(d, null, 2);
 }
 
+// ---------- Rule config form schema ----------
+// Drives both the Rule Config tab and the Location form.
+const RULE_SCHEMA = [
+  { section: "Working Pattern" },
+  { key: "week_pattern", label: "Week pattern",
+    hint: "How many working days per week.",
+    type: "select", options: [["5day","5 days (Sat+Sun off)"],["6day","6 days (Sun off)"],["alt_sat","6 days, alternate Sat off"]] },
+  { key: "week_off_day", label: "Primary week-off day",
+    hint: "Only used for 6-day pattern. 0=Mon … 6=Sun.",
+    type: "select", options: [[0,"Monday"],[1,"Tuesday"],[2,"Wednesday"],[3,"Thursday"],[4,"Friday"],[5,"Saturday"],[6,"Sunday"]] },
+  { key: "alt_sat_off_weeks", label: "Alt-Saturday off weeks",
+    hint: "When pattern = alt_sat, which Saturdays (of the month) are off.",
+    type: "csv_int", placeholder: "e.g. 2,4" },
+
+  { section: "Approved Leaves" },
+  { key: "approved_leaves_per_month", label: "Approved leaves per month",
+    hint: "Days of leave paid as approved. 0 means only week-offs are approved; all leaves count as absent.",
+    type: "number", step: "0.5", min: 0 },
+  { key: "leave_carry_forward", label: "Carry-forward policy",
+    hint: "Fixed = leave bucket resets monthly. Rollover = unused leaves carry to next month.",
+    type: "select", options: [["fixed","Fixed (reset monthly)"],["rollover","Rollover (carry forward)"]] },
+  { key: "female_extra_leave", label: "Female extra leave",
+    hint: "Additional non-carry-forward leave for female employees. 0 to disable.",
+    type: "number", step: "0.5", min: 0 },
+  { key: "excess_leave_to_absent", label: "Excess leave → Absent",
+    hint: "Leaves beyond the approved bucket convert to Absent (G).",
+    type: "bool" },
+
+  { section: "Holiday & Week-off Rules" },
+  { key: "holiday_work_multiplier", label: "Holiday-work multiplier",
+    hint: "If an employee works on a week-off (C) or holiday (D), pay this many days. 1.0 = single; 2.0 = double.",
+    type: "number", step: "0.1", min: 0 },
+  { key: "sandwich_rule", label: "Sandwich rule",
+    hint: "If pre & post days of a week-off/holiday are both leaves, count the week-off as leave too.",
+    type: "bool" },
+
+  { section: "Joining / Exit" },
+  { key: "attendance_starts_on_join_date", label: "Attendance starts on joining",
+    hint: "Days before joining date are ignored, not counted as absent.",
+    type: "bool" },
+  { key: "exit_trailing_absence_unpaid", label: "Exit trailing absence unpaid",
+    hint: "If employee leaves X but is absent on X-1, X-2, … then exit effectively moves to last attended day.",
+    type: "bool" },
+
+  { section: "Triggers / Flags" },
+  { key: "triggers.immediate_leave_after_joining_days", label: "Flag: immediate leave after joining (within N days)",
+    hint: "Flag employees who take a leave within N days of their joining date. 0 disables.",
+    type: "number", step: 1, min: 0 },
+  { key: "triggers.consecutive_leave_days", label: "Flag: consecutive leave days ≥ N",
+    hint: "Flag employees with a streak of N or more leave days. 0 disables.",
+    type: "number", step: 1, min: 0 },
+
+  { section: "Custom Checks" },
+  { key: "checks", label: "Validation formulas",
+    hint: "One expression per line. Variables: A,B,C,D,E,F,G,J,H,I,N,L,M,approved_leave,leave_bucket,DM,LD. Example: H == DM",
+    type: "lines" },
+];
+
+function _get(obj, path) {
+  return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+function _set(obj, path, val) {
+  const parts = path.split(".");
+  const last = parts.pop();
+  const target = parts.reduce((o, k) => (o[k] ??= {}), obj);
+  target[last] = val;
+}
+
+function renderRuleForm(container, cfg) {
+  container.innerHTML = "";
+  for (const item of RULE_SCHEMA) {
+    if (item.section) {
+      const h = document.createElement("div");
+      h.className = "cfg-hdr"; h.textContent = item.section;
+      container.appendChild(h);
+      continue;
+    }
+    const row = document.createElement("div"); row.className = "cfg-row";
+    const l = document.createElement("div"); l.className = "cfg-label";
+    l.innerHTML = `<b>${item.label}</b>${item.hint ? `<small>${item.hint}</small>` : ""}`;
+    const v = document.createElement("div"); v.className = "cfg-value";
+
+    const cur = _get(cfg, item.key);
+    let input;
+    if (item.type === "select") {
+      input = document.createElement("select");
+      for (const [val, lab] of item.options) {
+        const o = document.createElement("option");
+        o.value = val; o.textContent = lab;
+        if (String(cur) === String(val)) o.selected = true;
+        input.appendChild(o);
+      }
+    } else if (item.type === "bool") {
+      input = document.createElement("input");
+      input.type = "checkbox"; input.checked = !!cur;
+    } else if (item.type === "number") {
+      input = document.createElement("input");
+      input.type = "number";
+      if (item.step != null) input.step = item.step;
+      if (item.min != null) input.min = item.min;
+      input.value = cur ?? 0;
+    } else if (item.type === "csv_int") {
+      input = document.createElement("input");
+      input.type = "text"; input.placeholder = item.placeholder || "";
+      input.value = Array.isArray(cur) ? cur.join(",") : (cur || "");
+    } else if (item.type === "lines") {
+      input = document.createElement("textarea");
+      input.value = Array.isArray(cur) ? cur.join("\n") : (cur || "");
+    } else {
+      input = document.createElement("input");
+      input.type = "text"; input.value = cur ?? "";
+    }
+    input.dataset.key = item.key; input.dataset.type = item.type;
+    v.appendChild(input);
+    row.appendChild(l); row.appendChild(v);
+    container.appendChild(row);
+  }
+}
+
+function readRuleForm(container) {
+  const cfg = {};
+  container.querySelectorAll("[data-key]").forEach(el => {
+    const k = el.dataset.key, t = el.dataset.type;
+    let val;
+    if (t === "bool") val = el.checked;
+    else if (t === "number") val = parseFloat(el.value);
+    else if (t === "select") {
+      val = el.value;
+      // coerce numeric selects (week_off_day)
+      if (!isNaN(+val) && val !== "") val = +val;
+    } else if (t === "csv_int") {
+      val = el.value.split(",").map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n));
+    } else if (t === "lines") {
+      val = el.value.split("\n").map(s => s.trim()).filter(Boolean);
+    } else {
+      val = el.value;
+    }
+    _set(cfg, k, val);
+  });
+  return cfg;
+}
+
 // ---------- Rule config tab ----------
 async function loadConfig() {
   const id = $("#cfg-location").value; if (!id) return;
   const loc = await api(`/api/locations/${id}`);
+  renderRuleForm($("#cfg-form"), loc.rule_config || {});
   $("#cfg-json").value = JSON.stringify(loc.rule_config, null, 2);
 }
 async function saveConfig() {
+  const id = $("#cfg-location").value;
+  const loc = await api(`/api/locations/${id}`);
+  loc.rule_config = readRuleForm($("#cfg-form"));
+  await api(`/api/locations/${id}`, { method: "PUT", body: JSON.stringify(loc) });
+  $("#cfg-json").value = JSON.stringify(loc.rule_config, null, 2);
+  alert("Saved.");
+}
+async function saveConfigJSON() {
   const id = $("#cfg-location").value;
   const loc = await api(`/api/locations/${id}`);
   let cfg; try { cfg = JSON.parse($("#cfg-json").value); }
   catch(e) { alert("Invalid JSON: " + e.message); return; }
   loc.rule_config = cfg;
   await api(`/api/locations/${id}`, { method: "PUT", body: JSON.stringify(loc) });
+  renderRuleForm($("#cfg-form"), cfg);
   alert("Saved.");
 }
 
@@ -135,7 +287,7 @@ function locForm(l) {
   f.querySelector("[name=id]").value = l.id || "";
   f.querySelector("[name=code]").value = l.code || "";
   f.querySelector("[name=name]").value = l.name || "";
-  f.querySelector("[name=rule_config]").value = JSON.stringify(l.rule_config || {}, null, 2);
+  renderRuleForm($("#loc-cfg-form"), l.rule_config || {});
 }
 window.editLoc = l => locForm(l);
 window.delLoc = async id => {
@@ -147,13 +299,11 @@ $("#loc-new").onclick = () => locForm({});
 $("#loc-cancel").onclick = () => $("#loc-form").style.display = "none";
 $("#loc-save").onclick = async () => {
   const f = $("#loc-form");
-  let cfg; try { cfg = JSON.parse(f.querySelector("[name=rule_config]").value || "{}"); }
-  catch(e) { alert("Invalid JSON: " + e.message); return; }
   const body = {
     company_id: 0, // server sets from session
     code: f.querySelector("[name=code]").value,
     name: f.querySelector("[name=name]").value,
-    rule_config: cfg,
+    rule_config: readRuleForm($("#loc-cfg-form")),
   };
   const id = f.querySelector("[name=id]").value;
   if (id) await api(`/api/locations/${id}`, { method: "PUT", body: JSON.stringify(body) });
@@ -270,6 +420,7 @@ async function uploadAttendance() {
 $("#run-btn").onclick = runPayroll;
 $("#cfg-reload").onclick = loadConfig;
 $("#cfg-save").onclick = saveConfig;
+$("#cfg-save-json").onclick = saveConfigJSON;
 $("#emp-reload").onclick = loadEmployees;
 $("#loc-reload").onclick = loadLocationsTable;
 $("#up-btn").onclick = uploadAttendance;

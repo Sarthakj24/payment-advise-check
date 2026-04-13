@@ -25,10 +25,10 @@ DEFAULT_RULE_CONFIG: dict[str, Any] = {
     "week_off_day": 6,               # 0=Mon ... 6=Sun (primary weekly off)
     "alt_sat_off_weeks": [2, 4],     # when pattern=alt_sat, Sats off in these week-of-month indexes
 
-    "approved_leaves_per_month": 1.5,
+    "approved_leaves_per_month": 0,      # default: no approved leaves; weekoffs (C) only
     "leave_carry_forward": "rollover",   # "fixed" | "rollover"
-    "female_extra_leave": 1.0,           # non-carry-forward
-    "excess_leave_to_absent": True,
+    "female_extra_leave": 0,             # default: no extra; company can enable
+    "excess_leave_to_absent": True,      # leaves beyond approved bucket ⇒ Absent
 
     "holiday_work_multiplier": 2.0,      # working on C/D pays this many days
     "sandwich_rule": True,               # leave-weekoff-leave ⇒ weekoff counted as leave

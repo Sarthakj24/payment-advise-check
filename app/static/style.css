@@ -56,6 +56,21 @@ pre { background: #0b1220; color: #e5e7eb; padding: 1rem; border-radius: 6px;
 .grid2 label { display: flex; flex-direction: column; font-size: .8rem; color: #4b5563; gap: .25rem; }
 .grid2 input, .grid2 select { width: 100%; }
 
+/* Rule-config labeled form */
+.cfg-section { margin: 1rem 0 .25rem; font-size: .95rem; }
+.cfg-grid { display: grid; grid-template-columns: minmax(260px, 320px) 1fr; gap: 0; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; overflow: hidden; }
+.cfg-row { display: contents; }
+.cfg-row > .cfg-label, .cfg-row > .cfg-value { padding: .55rem .75rem; border-bottom: 1px solid #e5e7eb; }
+.cfg-row:last-child > .cfg-label, .cfg-row:last-child > .cfg-value { border-bottom: 0; }
+.cfg-label { background: #f9fafb; font-size: .85rem; color: #374151; display: flex; flex-direction: column; gap: .15rem; }
+.cfg-label small { color: #6b7280; font-size: .72rem; font-weight: 400; }
+.cfg-label b { font-weight: 600; }
+.cfg-value { display: flex; align-items: center; gap: .5rem; }
+.cfg-value input[type=number], .cfg-value input[type=text], .cfg-value select { width: 100%; max-width: 240px; }
+.cfg-value textarea { width: 100%; min-height: 60px; }
+.cfg-value input[type=checkbox] { width: auto; }
+.cfg-hdr { grid-column: 1 / -1; background: #111827; color: #fff; padding: .4rem .75rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .5px; }
+
 .att-cell { display: flex; align-items: center; gap: 2px; }
 .att-cell select { padding: 2px; width: 42px; font-size: .75rem; }
 .att-cell input[type=checkbox] { margin: 0; }
