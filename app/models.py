@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from sqlalchemy import (
-    Column, Integer, String, Date, DateTime, Float, ForeignKey, JSON, Boolean
+    Column, Integer, String, Date, DateTime, Float, ForeignKey, JSON, Boolean,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 from .db import Base
@@ -11,6 +12,26 @@ class Company(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
     locations = relationship("Location", back_populates="company", cascade="all, delete")
+    users = relationship("User", back_populates="company", cascade="all, delete")
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    username = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    is_admin = Column(Boolean, default=False)
+    company = relationship("Company", back_populates="users")
+
+
+class Holiday(Base):
+    __tablename__ = "holidays"
+    id = Column(Integer, primary_key=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    day = Column(Date, nullable=False)
+    name = Column(String, nullable=False)
+    __table_args__ = (UniqueConstraint("location_id", "day", name="uix_loc_day"),)
 
 
 class Location(Base):

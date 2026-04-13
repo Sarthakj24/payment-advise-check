@@ -7,23 +7,30 @@
 </head>
 <body>
 <header>
-  <h1>Attendance Payroll Calculator</h1>
-  <p class="sub">Configurable per-company rule engine · compute payable days &amp; payroll</p>
+  <div>
+    <h1>Attendance Payroll Calculator</h1>
+    <p class="sub">Configurable per-company rule engine</p>
+  </div>
+  <div class="user-box">
+    <span id="who"></span>
+    <button id="logout" class="link">Logout</button>
+  </div>
 </header>
 
 <nav class="tabs">
   <button class="tab active" data-tab="run">Run Payroll</button>
-  <button class="tab" data-tab="config">Rule Config</button>
+  <button class="tab" data-tab="attendance">Attendance</button>
   <button class="tab" data-tab="employees">Employees</button>
-  <button class="tab" data-tab="upload">Upload Attendance</button>
+  <button class="tab" data-tab="locations">Locations</button>
+  <button class="tab" data-tab="holidays">Holidays</button>
+  <button class="tab" data-tab="config">Rule Config</button>
+  <button class="tab" data-tab="upload">Upload CSV</button>
 </nav>
 
 <section id="run" class="panel active">
   <h2>Run Payroll</h2>
   <div class="row">
-    <label>Location
-      <select id="run-location"></select>
-    </label>
+    <label>Location <select id="run-location"></select></label>
     <label>Year <input id="run-year" type="number" value="2025" /></label>
     <label>Month <input id="run-month" type="number" value="1" min="1" max="12" /></label>
     <button id="run-btn">Run</button>
@@ -31,39 +38,102 @@
     <button id="dl-xlsx" disabled>Download Excel</button>
   </div>
   <div id="run-summary"></div>
-  <table id="run-table"></table>
+  <div class="table-wrap"><table id="run-table"></table></div>
   <details><summary>Raw calculation detail</summary><pre id="run-raw"></pre></details>
 </section>
 
-<section id="config" class="panel">
-  <h2>Rule Config</h2>
+<section id="attendance" class="panel">
+  <h2>Attendance Grid</h2>
+  <p class="hint">Cells are pre-filled from week pattern + declared holidays. Edit any cell and hit Save. Codes: A B C D E F G. Click the ✓ box to flag work-on-holiday.</p>
   <div class="row">
-    <label>Location
-      <select id="cfg-location"></select>
-    </label>
-    <button id="cfg-reload">Reload</button>
-    <button id="cfg-save">Save</button>
+    <label>Location <select id="att-location"></select></label>
+    <label>Year <input id="att-year" type="number" value="2025"/></label>
+    <label>Month <input id="att-month" type="number" value="1" min="1" max="12"/></label>
+    <button id="att-load">Load</button>
+    <button id="att-save">Save</button>
   </div>
-  <p class="hint">Edit the JSON. All fields are optional — missing fields inherit defaults from the engine.</p>
-  <textarea id="cfg-json" rows="30"></textarea>
-  <details><summary>Default config reference</summary><pre id="cfg-default"></pre></details>
+  <div class="table-wrap"><table id="att-table"></table></div>
 </section>
 
 <section id="employees" class="panel">
   <h2>Employees</h2>
   <div class="row">
-    <label>Location
-      <select id="emp-location"></select>
-    </label>
+    <label>Location <select id="emp-location"></select></label>
     <button id="emp-reload">Reload</button>
+    <button id="emp-new">+ New employee</button>
   </div>
-  <table id="emp-table"></table>
+  <div class="table-wrap"><table id="emp-table"></table></div>
+
+  <div id="emp-form" class="form-card" style="display:none">
+    <h3 id="emp-form-title">New employee</h3>
+    <input type="hidden" name="id"/>
+    <div class="grid2">
+      <label>Emp code <input name="emp_code" required></label>
+      <label>Name <input name="name" required></label>
+      <label>Gender <select name="gender"><option>M</option><option>F</option><option>O</option></select></label>
+      <label>Joining date <input name="joining_date" type="date" required></label>
+      <label>Exit date <input name="exit_date" type="date"></label>
+      <label>Monthly salary <input name="monthly_salary" type="number" step="0.01" value="0"></label>
+      <label>Opening leave <input name="opening_leave" type="number" step="0.5" value="0"></label>
+    </div>
+    <div class="row">
+      <button id="emp-save">Save</button>
+      <button id="emp-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</section>
+
+<section id="locations" class="panel">
+  <h2>Locations</h2>
+  <div class="row">
+    <button id="loc-reload">Reload</button>
+    <button id="loc-new">+ New location</button>
+  </div>
+  <div class="table-wrap"><table id="loc-table"></table></div>
+
+  <div id="loc-form" class="form-card" style="display:none">
+    <h3 id="loc-form-title">New location</h3>
+    <input type="hidden" name="id"/>
+    <div class="grid2">
+      <label>Code <input name="code" required></label>
+      <label>Name <input name="name" required></label>
+    </div>
+    <p class="hint">Rule config JSON — any missing keys inherit engine defaults.</p>
+    <textarea name="rule_config" rows="20" style="width:100%"></textarea>
+    <div class="row">
+      <button id="loc-save">Save</button>
+      <button id="loc-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
+</section>
+
+<section id="holidays" class="panel">
+  <h2>Holiday Calendar</h2>
+  <div class="row">
+    <label>Location <select id="hol-location"></select></label>
+    <label>Date <input id="hol-day" type="date"></label>
+    <label>Name <input id="hol-name" placeholder="e.g. Republic Day"></label>
+    <button id="hol-add">Add</button>
+  </div>
+  <div class="table-wrap"><table id="hol-table"></table></div>
+</section>
+
+<section id="config" class="panel">
+  <h2>Rule Config (shortcut)</h2>
+  <p class="hint">Edit per-location JSON here for quick tweaks; same as the form under Locations.</p>
+  <div class="row">
+    <label>Location <select id="cfg-location"></select></label>
+    <button id="cfg-reload">Reload</button>
+    <button id="cfg-save">Save</button>
+  </div>
+  <textarea id="cfg-json" rows="25" style="width:100%"></textarea>
+  <details><summary>Default config reference</summary><pre id="cfg-default"></pre></details>
 </section>
 
 <section id="upload" class="panel">
   <h2>Upload Attendance CSV</h2>
   <p class="hint">CSV columns: <code>emp_code,day,code,worked_on_holiday</code>.
-    Codes: A=Present, B=Half, C=Week Off, D=Holiday, E=Leave, F=Half Leave, G=Absent.</p>
+    Codes: A=Present · B=Half · C=Week Off · D=Holiday · E=Leave · F=Half Leave · G=Absent.</p>
   <div class="row">
     <label>Location <select id="up-location"></select></label>
     <input id="up-file" type="file" accept=".csv" />

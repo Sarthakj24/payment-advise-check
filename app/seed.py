@@ -1,8 +1,8 @@
-"""Seed a sample company, location, employees, and attendance for demo."""
-from datetime import date, timedelta
+"""Seed a sample company, user, location, employees, holidays, attendance."""
+from datetime import date
 from pathlib import Path
 from .db import SessionLocal
-from . import models
+from . import models, auth
 
 
 SAMPLE_RULE_CONFIG = {
@@ -33,9 +33,18 @@ def seed():
         comp = models.Company(name="ACME Corp")
         db.add(comp); db.flush()
 
+        admin = models.User(company_id=comp.id, username="admin",
+                            password_hash=auth.hash_password("admin123"),
+                            is_admin=True)
+        db.add(admin)
+
         loc = models.Location(company_id=comp.id, code="BLR-01",
                               name="Bengaluru HQ", rule_config=SAMPLE_RULE_CONFIG)
         db.add(loc); db.flush()
+
+        # Holidays for Jan 2025
+        for d, nm in [(date(2025, 1, 14), "Pongal"), (date(2025, 1, 26), "Republic Day")]:
+            db.add(models.Holiday(location_id=loc.id, day=d, name=nm))
 
         employees = [
             models.Employee(location_id=loc.id, emp_code="E001", name="Asha Rao",
@@ -56,40 +65,33 @@ def seed():
             db.add(e)
         db.flush()
 
-        # Generate Jan-2025 attendance
+        holiday_days = {date(2025, 1, 14), date(2025, 1, 26)}
         for e in employees:
             for d in range(1, 32):
                 dt = date(2025, 1, d)
                 if e.joining_date > dt:
                     continue
-                if e.exit_date and e.exit_date < dt and e.emp_code != "E003":
+                if e.exit_date and e.exit_date < dt:
                     continue
-
-                if dt.weekday() == 6:
-                    code = "C"; worked = False
+                if dt in holiday_days:
+                    code = "D"
+                elif dt.weekday() == 6:
+                    code = "C"
                 else:
-                    code = "A"; worked = False
-
-                # Vikram takes 2 consecutive leaves
-                if e.emp_code == "E004" and d in (14, 15):
+                    code = "A"
+                # Tweaks to showcase flags
+                if e.emp_code == "E004" and d in (15, 16):
                     code = "E"
-                # Rahul takes immediate leave after joining
                 if e.emp_code == "E002" and d == 10:
                     code = "E"
-                # Priya — exit 25; trailing absence on 26, 27
-                if e.emp_code == "E003" and d in (26, 27):
-                    code = "G"
-                # Asha — sandwich example: Sat leave, Sun off, Mon leave (18/19/20)
                 if e.emp_code == "E001" and d in (18, 20):
                     code = "E"
-
                 db.add(models.AttendanceRecord(
-                    employee_id=e.id, day=dt, code=code,
-                    worked_on_holiday=worked,
+                    employee_id=e.id, day=dt, code=code, worked_on_holiday=False,
                 ))
         db.commit()
 
-        # Also write sample CSV for reference
+        # Export CSV alongside
         sample_dir = Path(__file__).parent.parent / "sample_data"
         sample_dir.mkdir(exist_ok=True)
         emp_by_id = {e.id: e for e in employees}
