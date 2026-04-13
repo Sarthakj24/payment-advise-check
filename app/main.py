@@ -58,11 +58,12 @@ def _owned_employee(db: Session, user: models.User, emp_id: int) -> models.Emplo
 @app.post("/api/auth/login")
 async def login(request: Request, db: Session = Depends(get_db)):
     body = await request.json()
-    user = db.query(models.User).filter_by(username=body.get("username", "")).first()
+    email = (body.get("email") or body.get("username") or "").strip().lower()
+    user = db.query(models.User).filter_by(email=email).first()
     if not user or not auth.verify_password(body.get("password", ""), user.password_hash):
         raise HTTPException(401, "Invalid credentials")
     request.session["uid"] = user.id
-    return {"ok": True, "username": user.username, "company_id": user.company_id}
+    return {"ok": True, "email": user.email, "company_id": user.company_id}
 
 
 @app.post("/api/auth/logout")
@@ -73,8 +74,18 @@ def logout(request: Request):
 
 @app.get("/api/auth/me")
 def me(user: models.User = Depends(auth.get_current_user)):
-    return {"id": user.id, "username": user.username, "company_id": user.company_id,
+    return {"id": user.id, "email": user.email, "company_id": user.company_id,
             "role": user.role, "is_admin": (user.role or "").lower() == "admin"}
+
+
+_EMAIL_RE = __import__("re").compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_email(s: str) -> str:
+    s = (s or "").strip().lower()
+    if not _EMAIL_RE.match(s):
+        raise HTTPException(400, "A valid email address is required")
+    return s
 
 
 @app.post("/api/auth/register")
@@ -82,22 +93,22 @@ async def register(request: Request, db: Session = Depends(get_db)):
     """Create a new company + its first admin user in one step."""
     body = await request.json()
     company_name = body.get("company_name", "").strip()
-    username = body.get("username", "").strip()
+    email = _validate_email(body.get("email") or body.get("username"))
     password = body.get("password", "")
-    if not (company_name and username and password):
-        raise HTTPException(400, "company_name, username, password required")
+    if not (company_name and password):
+        raise HTTPException(400, "company_name, email, password required")
     if db.query(models.Company).filter_by(name=company_name).first():
         raise HTTPException(400, "Company already exists")
-    if db.query(models.User).filter_by(username=username).first():
-        raise HTTPException(400, "Username taken")
+    if db.query(models.User).filter_by(email=email).first():
+        raise HTTPException(400, "Email already registered")
     comp = models.Company(name=company_name)
     db.add(comp); db.flush()
-    user = models.User(company_id=comp.id, username=username,
+    user = models.User(company_id=comp.id, email=email,
                        password_hash=auth.hash_password(password),
                        role="admin", is_admin=True)
     db.add(user); db.commit()
     request.session["uid"] = user.id
-    return {"ok": True, "company_id": comp.id, "username": username, "role": "admin"}
+    return {"ok": True, "company_id": comp.id, "email": email, "role": "admin"}
 
 
 # ---------- User management (admin-only) ----------
@@ -111,13 +122,14 @@ def list_users(user: models.User = Depends(auth.require_admin),
 def create_user(body: schemas.UserCreate,
                 user: models.User = Depends(auth.require_admin),
                 db: Session = Depends(get_db)):
-    if db.query(models.User).filter_by(username=body.username).first():
-        raise HTTPException(400, "Username taken")
+    email = _validate_email(body.email)
+    if db.query(models.User).filter_by(email=email).first():
+        raise HTTPException(400, "Email already registered")
     role = (body.role or "kam").lower()
     if role not in ("admin", "kam"):
         raise HTTPException(400, "Role must be admin or kam")
     u = models.User(
-        company_id=user.company_id, username=body.username,
+        company_id=user.company_id, email=email,
         password_hash=auth.hash_password(body.password),
         role=role, is_admin=(role == "admin"),
     )
@@ -359,7 +371,7 @@ def get_attendance(location_id: int, year: int, month: int,
             else:
                 if dt in hols:
                     code = "D"
-                elif _is_scheduled_week_off(dt, cfg):
+                elif _is_scheduled_week_off(dt, cfg, e.week_off_day):
                     code = "C"
                 elif (e.joining_date and dt < e.joining_date) or (e.exit_date and dt > e.exit_date):
                     code = ""  # out of employment window

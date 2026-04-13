@@ -76,10 +76,10 @@ def seed():
         comp = models.Company(name="ACME Corp")
         db.add(comp); db.flush()
 
-        db.add(models.User(company_id=comp.id, username="admin",
+        db.add(models.User(company_id=comp.id, email="admin@acme.test",
                            password_hash=auth.hash_password("admin123"),
                            role="admin", is_admin=True))
-        db.add(models.User(company_id=comp.id, username="kam",
+        db.add(models.User(company_id=comp.id, email="kam@acme.test",
                            password_hash=auth.hash_password("kam123"),
                            role="kam", is_admin=False))
 

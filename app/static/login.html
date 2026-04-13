@@ -14,19 +14,19 @@
   </div>
 
   <form id="login-form">
-    <label>Username <input name="username" value="admin" required></label>
+    <label>Email <input name="email" type="email" value="admin@acme.test" required></label>
     <label>Password <input name="password" type="password" value="admin123" required></label>
     <button type="submit">Sign in</button>
   </form>
 
   <form id="register-form" style="display:none">
     <label>Company name <input name="company_name" required></label>
-    <label>Admin username <input name="username" required></label>
+    <label>Admin email <input name="email" type="email" required></label>
     <label>Password <input name="password" type="password" required></label>
     <button type="submit">Create company &amp; sign in</button>
   </form>
 
-  <p class="hint">Demo account preloaded: <b>admin / admin123</b> (ACME Corp).</p>
+  <p class="hint">Demo account preloaded: <b>admin@acme.test / admin123</b> (ACME Corp).</p>
   <p id="msg" class="err"></p>
 </div>
 <script>

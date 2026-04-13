@@ -5,11 +5,24 @@ let lastGrid = null;
 let ME = null;
 
 // ---------- Tabs ----------
-$$(".tab").forEach(t => t.onclick = () => {
+$$(".tab").forEach(t => t.onclick = async () => {
   $$(".tab").forEach(x => x.classList.remove("active"));
   $$(".panel").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
   $("#" + t.dataset.tab).classList.add("active");
+  // On-demand data loads: re-populate locations first, then the tab's data
+  try {
+    if (t.dataset.tab === "tracker") {
+      await loadLocations();
+      await loadTracker();
+    } else if (t.dataset.tab === "users" && ME && ME.is_admin) {
+      await loadUsers();
+    } else if (t.dataset.tab === "holidays") {
+      await loadLocations(); loadHolidays();
+    } else if (t.dataset.tab === "employees") {
+      await loadLocations(); loadEmployees();
+    }
+  } catch (e) { /* ignore */ }
 });
 
 async function api(path, opts={}) {
@@ -28,7 +41,7 @@ async function api(path, opts={}) {
 async function whoami() {
   try {
     ME = await api("/api/auth/me");
-    $("#who").textContent = `${ME.username} · ${ME.role.toUpperCase()} · company #${ME.company_id}`;
+    $("#who").textContent = `${ME.email} · ${ME.role.toUpperCase()} · company #${ME.company_id}`;
     applyRoleVisibility();
   } catch { location.href = "/login"; }
 }
@@ -375,7 +388,18 @@ $("#hol-add").onclick = async () => {
 };
 
 // ---------- Attendance grid ----------
-const CODES = ["", "A", "B", "C", "D", "E", "F", "G"];
+// Each code paired with its human-readable name from the spec.
+const CODE_LABELS = {
+  "":  "—",
+  "A": "Present",
+  "B": "Half Present",
+  "C": "Week Off",
+  "D": "Holiday",
+  "E": "Leave",
+  "F": "Half Leave",
+  "G": "Absent",
+};
+const CODES = Object.keys(CODE_LABELS);
 async function loadAttendance() {
   const body = { location_id: +$("#att-location").value,
                  year: +$("#att-year").value, month: +$("#att-month").value };
@@ -386,7 +410,7 @@ async function loadAttendance() {
   const rows = data.rows.map((row, ri) => {
     const cells = row.days.map((d, di) => {
       const klass = d.holiday_name ? "holiday" : d.code === "C" ? "weekoff" : d.code === "" ? "oow" : "";
-      const opts = CODES.map(c => `<option${c===d.code?" selected":""}>${c}</option>`).join("");
+      const opts = CODES.map(c => `<option value="${c}"${c===d.code?" selected":""}>${c ? `${c} — ${CODE_LABELS[c]}` : "—"}</option>`).join("");
       const chk = (d.code==="C"||d.code==="D") ? `<input type=checkbox data-r=${ri} data-d=${di} ${d.worked_on_holiday?"checked":""} title="Worked on holiday/week-off">` : "";
       return `<td class="att-cell ${klass}"><select data-r=${ri} data-d=${di}>${opts}</select>${chk}</td>`;
     }).join("");
@@ -425,7 +449,7 @@ async function loadTracker() {
     const holName = data.holidays[`${y}-${mm}-${dd}`];
     return `<th class="${holName ? 'holiday' : ''}" title="${holName || ''}">${i + 1}</th>`;
   }).join("");
-  const sumHdr = "<th>P</th><th>A</th><th>W</th><th>H</th><th>L</th>";
+  const sumHdr = "<th>Present</th><th>Absent</th><th>Week Off</th><th>Holiday</th><th>Leave</th>";
   const rows = data.rows.map(r => {
     const cells = r.days.map(c => {
       const cls = c === "P" ? "trk-p" : c === "A" ? "trk-a" :
@@ -450,8 +474,8 @@ async function loadUsers() {
   try {
     const list = await api("/api/users");
     $("#usr-table").innerHTML = [
-      "<tr><th>Username</th><th>Role</th><th></th></tr>",
-      ...list.map(u => `<tr><td>${u.username}</td><td>${u.role}</td>
+      "<tr><th>Email</th><th>Role</th><th></th></tr>",
+      ...list.map(u => `<tr><td>${u.email}</td><td>${u.role}</td>
         <td><button class="danger" onclick='delUser(${u.id})'>Delete</button></td></tr>`)
     ].join("");
   } catch (e) { /* non-admin — ignore */ }
@@ -463,11 +487,11 @@ window.delUser = async id => {
 };
 if ($("#usr-add")) $("#usr-add").onclick = async () => {
   const body = {
-    username: $("#usr-name").value.trim(),
+    email: $("#usr-name").value.trim(),
     password: $("#usr-pw").value,
     role: $("#usr-role").value,
   };
-  if (!body.username || !body.password) return alert("Username and password required");
+  if (!body.email || !body.password) return alert("Email and password required");
   await api("/api/users", { method: "POST", body: JSON.stringify(body) });
   $("#usr-name").value = ""; $("#usr-pw").value = "";
   loadUsers();

@@ -19,7 +19,7 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
-    username = Column(String, unique=True, nullable=False)
+    email = Column(String, unique=True, nullable=False)  # login identifier
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False, default="kam")  # "admin" | "kam"
     is_admin = Column(Boolean, default=False)  # legacy flag, kept in sync with role

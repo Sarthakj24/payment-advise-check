@@ -49,13 +49,13 @@ class PayrollRunIn(BaseModel):
 
 
 class UserCreate(BaseModel):
-    username: str
+    email: str
     password: str
     role: str = "kam"  # "admin" | "kam"
 
 
 class UserOut(BaseModel):
     id: int
-    username: str
+    email: str
     role: str
     class Config: from_attributes = True

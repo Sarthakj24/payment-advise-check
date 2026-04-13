@@ -46,7 +46,9 @@
 
 <section id="attendance" class="panel">
   <h2>Attendance Grid</h2>
-  <p class="hint">Cells are pre-filled from week pattern + declared holidays. Edit any cell and hit Save. Codes: A B C D E F G. Click the ✓ box to flag work-on-holiday.</p>
+  <p class="hint">Cells are pre-filled from week pattern + declared holidays. Edit any cell and hit Save.
+    <br>Codes: <b>A</b>=Present · <b>B</b>=Half Present · <b>C</b>=Week Off · <b>D</b>=Holiday · <b>E</b>=Leave · <b>F</b>=Half Leave · <b>G</b>=Absent.
+    Click the ✓ box to flag work-on-holiday.</p>
   <div class="row">
     <label>Location <select id="att-location"></select></label>
     <label>Year <input id="att-year" type="number" value="2025"/></label>
@@ -73,7 +75,7 @@
   <h2>Users</h2>
   <p class="hint">Admin role: full access to locations, rules, and users. KAM role: view-only for locations and rules; can manage employees, attendance, and payroll.</p>
   <div class="row">
-    <label>Username <input id="usr-name"></label>
+    <label>Email <input id="usr-name" type="email"></label>
     <label>Password <input id="usr-pw" type="password"></label>
     <label>Role <select id="usr-role"><option value="kam">KAM</option><option value="admin">Admin</option></select></label>
     <button id="usr-add">Create user</button>
