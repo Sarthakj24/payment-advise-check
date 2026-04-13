@@ -412,7 +412,7 @@ async function loadAttendance() {
       const klass = d.holiday_name ? "holiday" : d.code === "C" ? "weekoff" : d.code === "" ? "oow" : "";
       const opts = CODES.map(c => `<option value="${c}"${c===d.code?" selected":""}>${c ? `${c} — ${CODE_LABELS[c]}` : "—"}</option>`).join("");
       const chk = (d.code==="C"||d.code==="D") ? `<input type=checkbox data-r=${ri} data-d=${di} ${d.worked_on_holiday?"checked":""} title="Worked on holiday/week-off">` : "";
-      return `<td class="att-cell ${klass}"><select data-r=${ri} data-d=${di}>${opts}</select>${chk}</td>`;
+      return `<td class="att-cell ${klass}"><div class="att-wrap"><select data-r=${ri} data-d=${di}>${opts}</select>${chk}</div></td>`;
     }).join("");
     return `<tr><td><b>${row.emp_code}</b><br><small>${row.name}</small></td>${cells}</tr>`;
   }).join("");
