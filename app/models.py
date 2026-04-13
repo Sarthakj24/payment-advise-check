@@ -21,7 +21,8 @@ class User(Base):
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
     username = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
-    is_admin = Column(Boolean, default=False)
+    role = Column(String, nullable=False, default="kam")  # "admin" | "kam"
+    is_admin = Column(Boolean, default=False)  # legacy flag, kept in sync with role
     company = relationship("Company", back_populates="users")
 
 
@@ -50,12 +51,14 @@ class Employee(Base):
     id = Column(Integer, primary_key=True)
     location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
     emp_code = Column(String, nullable=False)
+    title = Column(String, nullable=True)            # Mr / Ms / Mrs / Dr / job title
     name = Column(String, nullable=False)
     gender = Column(String, nullable=False, default="M")  # M / F / O
     joining_date = Column(Date, nullable=False)
     exit_date = Column(Date, nullable=True)
     monthly_salary = Column(Float, nullable=False, default=0.0)
     opening_leave = Column(Float, nullable=False, default=0.0)
+    week_off_day = Column(Integer, nullable=True)    # 0=Mon..6=Sun (used in roster mode)
     location = relationship("Location", back_populates="employees")
 
 

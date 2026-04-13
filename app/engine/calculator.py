@@ -21,9 +21,18 @@ from typing import Any
 # Full default config. Every flag documented. A location's saved config is
 # merged over these defaults so admins only need to specify what's different.
 DEFAULT_RULE_CONFIG: dict[str, Any] = {
-    "week_pattern": "6day",          # "5day" | "6day" | "alt_sat"
-    "week_off_day": 6,               # 0=Mon ... 6=Sun (primary weekly off)
+    "week_pattern": "6day",          # "5day" | "6day" | "alt_sat" | "roster"
+    "week_off_day": 6,               # 0=Mon ... 6=Sun (when pattern=6day)
     "alt_sat_off_weeks": [2, 4],     # when pattern=alt_sat, Sats off in these week-of-month indexes
+    # roster_mode: if true (or pattern="roster"), each employee has their own
+    # Employee.week_off_day. In that case the (A+B)/7 calculation is skipped
+    # and the week_off_cap_percent rule governs week-off budgeting.
+    "roster_mode": False,
+
+    # OVERRIDES EVERYTHING: ceiling on week-offs as % of total working days.
+    # If actual C count exceeds this cap, excess days convert to Absent (G).
+    # 0 disables the cap entirely.
+    "week_off_cap_percent": 0,
 
     "approved_leaves_per_month": 0,      # default: no approved leaves; weekoffs (C) only
     "leave_carry_forward": "rollover",   # "fixed" | "rollover"
@@ -72,9 +81,12 @@ def _week_of_month(d: date) -> int:
     return ((d.day + offset - 1) // 7) + 1
 
 
-def _is_scheduled_week_off(d: date, cfg: dict) -> bool:
+def _is_scheduled_week_off(d: date, cfg: dict, emp_week_off_day: int | None = None) -> bool:
     pattern = cfg["week_pattern"]
     wd = d.weekday()  # 0=Mon
+    # Roster mode: use employee's own week_off_day
+    if pattern == "roster" or cfg.get("roster_mode"):
+        return emp_week_off_day is not None and wd == int(emp_week_off_day)
     if pattern == "5day":
         return wd in (5, 6)          # Sat+Sun off
     if pattern == "6day":
@@ -168,6 +180,7 @@ def calculate_payroll(
         d += timedelta(days=1)
 
     # Normalize: ensure every day in window has a record
+    emp_wo = employee.get("week_off_day")
     norm: dict[date, dict] = {}
     for d in day_list:
         r = by_day.get(d)
@@ -175,7 +188,7 @@ def calculate_payroll(
             norm[d] = dict(r)
         else:
             # No record → treat as week-off if scheduled, else Absent
-            if _is_scheduled_week_off(d, cfg):
+            if _is_scheduled_week_off(d, cfg, emp_wo):
                 norm[d] = {"day": d, "code": "C", "worked_on_holiday": False}
             else:
                 norm[d] = {"day": d, "code": "G", "worked_on_holiday": False}
@@ -258,18 +271,36 @@ def calculate_payroll(
             c.G += f_move
         notes.append(f"{excess} day(s) excess leave converted to Absent")
 
-    # ---- Approved week-off (rule 1: mid-week joiner still entitled) --------
-    # Standard: (A + B) / (7 if 6day else 6) rounded to 2dp
+    # ---- Week-off cap % rule (OVERRIDES everything else) -------------------
+    # If roster_mode: skip the (A+B)/7 mid-week-joiner proration — the cap %
+    # covers week-off budgeting regardless of pattern.
+    # Otherwise compute traditional approved week-off for info only.
     worked_days = c.A + c.B
-    per_week = {"5day": 5, "6day": 6, "alt_sat": 5.5}.get(cfg["week_pattern"], 6)
-    approved_week_off = round(worked_days / per_week, 2) if per_week else 0
+    roster = bool(cfg.get("roster_mode")) or cfg["week_pattern"] == "roster"
+    if roster:
+        approved_week_off = None  # not applicable
+    else:
+        per_week = {"5day": 5, "6day": 6, "alt_sat": 5.5}.get(cfg["week_pattern"], 6)
+        approved_week_off = round(worked_days / per_week, 2) if per_week else 0
     approved_week_off_actual = c.C
-    excess_week_off = max(0.0, approved_week_off_actual - approved_week_off)
-    if excess_week_off > 0 and joining and joining > first_day:
-        notes.append(
-            f"Mid-week joiner: {excess_week_off} excess week-off day(s) still "
-            "approved per policy"
-        )
+    excess_week_off = 0.0
+
+    # Apply cap %: C must not exceed cap_pct * total working days in window
+    cap_pct = float(cfg.get("week_off_cap_percent", 0) or 0)
+    if cap_pct > 0:
+        # base = total days in window (a natural denominator for "working days")
+        base_days = float(len(day_list))
+        cap_allowed = round(base_days * cap_pct / 100.0, 2)
+        if c.C > cap_allowed:
+            excess = c.C - cap_allowed
+            c.C -= excess
+            c.G += excess
+            excess_week_off = excess
+            notes.append(
+                f"Week-off cap: {excess} day(s) exceeded "
+                f"{cap_pct}% cap ({cap_allowed:.2f} of {base_days:.0f} days) "
+                "— converted to Absent"
+            )
 
     # ---- Totals ------------------------------------------------------------
     H = c.A + c.B + c.C + c.D + c.E + c.F + c.G
@@ -339,7 +370,7 @@ def calculate_payroll(
     gross = round(per_day * payable_days, 2)
 
     return {
-        "employee": {k: employee.get(k) for k in ("emp_code", "name", "gender")},
+        "employee": {k: employee.get(k) for k in ("emp_code", "title", "name", "gender")},
         "period": {"year": year, "month": month, "DM": dm, "LD": dm},
         "window": {"start": window_start.isoformat(), "end": window_end.isoformat()},
         "effective_exit_date": effective_exit.isoformat() if effective_exit else None,

@@ -36,3 +36,10 @@ def require_company(
     if company_id is not None and company_id != user.company_id:
         raise HTTPException(403, "Forbidden")
     return user.company_id
+
+
+def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
+    """Only admin role can pass this gate."""
+    if (user.role or "").lower() != "admin":
+        raise HTTPException(403, "Admin role required")
+    return user

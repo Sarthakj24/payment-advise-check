@@ -71,6 +71,15 @@ pre { background: #0b1220; color: #e5e7eb; padding: 1rem; border-radius: 6px;
 .cfg-value input[type=checkbox] { width: auto; }
 .cfg-hdr { grid-column: 1 / -1; background: #111827; color: #fff; padding: .4rem .75rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .5px; }
 
+.trk-cell { text-align: center; font-weight: 600; font-size: .8rem; width: 22px; padding: .3rem 0; }
+.trk-cell.trk-p { background: #dcfce7; color: #166534; }
+.trk-cell.trk-a { background: #fee2e2; color: #991b1b; }
+.trk-cell.trk-w { background: #dbeafe; color: #1e40af; }
+.trk-cell.trk-h { background: #fed7aa; color: #9a3412; }
+.trk-cell.trk-l { background: #fef3c7; color: #92400e; }
+.trk-cell.trk-o { background: #f3f4f6; color: #9ca3af; }
+#trk-table th.holiday { background: #fed7aa; }
+
 .att-cell { display: flex; align-items: center; gap: 2px; }
 .att-cell select { padding: 2px; width: 42px; font-size: .75rem; }
 .att-cell input[type=checkbox] { margin: 0; }

@@ -2,6 +2,7 @@ const $ = sel => document.querySelector(sel);
 const $$ = sel => document.querySelectorAll(sel);
 let lastRunId = null;
 let lastGrid = null;
+let ME = null;
 
 // ---------- Tabs ----------
 $$(".tab").forEach(t => t.onclick = () => {
@@ -25,8 +26,29 @@ async function api(path, opts={}) {
 
 // ---------- Whoami / logout ----------
 async function whoami() {
-  try { const me = await api("/api/auth/me"); $("#who").textContent = me.username + " · company #" + me.company_id; }
-  catch { location.href = "/login"; }
+  try {
+    ME = await api("/api/auth/me");
+    $("#who").textContent = `${ME.username} · ${ME.role.toUpperCase()} · company #${ME.company_id}`;
+    applyRoleVisibility();
+  } catch { location.href = "/login"; }
+}
+function applyRoleVisibility() {
+  const isAdmin = !!(ME && ME.is_admin);
+  // Hide admin-only tabs for KAMs
+  $$("[data-admin-only]").forEach(el => { el.style.display = isAdmin ? "" : "none"; });
+  // Hide Save buttons on Rule Config and Location form for non-admins
+  const saveButtons = ["#cfg-save", "#cfg-save-json", "#loc-new"];
+  saveButtons.forEach(s => { if ($(s)) $(s).style.display = isAdmin ? "" : "none"; });
+  // If KAM landed on locations/users tab, bounce to Run Payroll
+  if (!isAdmin) {
+    const active = document.querySelector(".panel.active");
+    if (active && (active.id === "locations" || active.id === "users")) {
+      $$(".tab").forEach(x => x.classList.remove("active"));
+      $$(".panel").forEach(x => x.classList.remove("active"));
+      document.querySelector(".tab[data-tab=run]").classList.add("active");
+      $("#run").classList.add("active");
+    }
+  }
 }
 $("#logout").onclick = async () => { await api("/api/auth/logout", {method: "POST"}); location.href = "/login"; };
 
@@ -34,7 +56,7 @@ $("#logout").onclick = async () => { await api("/api/auth/logout", {method: "POS
 async function loadLocations() {
   const locs = await api("/api/locations");
   const opts = locs.map(l => `<option value="${l.id}">${l.name} (${l.code})</option>`).join("");
-  ["#run-location","#cfg-location","#emp-location","#up-location","#att-location","#hol-location"]
+  ["#run-location","#cfg-location","#emp-location","#up-location","#att-location","#hol-location","#trk-location"]
     .forEach(s => { if ($(s)) $(s).innerHTML = opts; });
   return locs;
 }
@@ -50,13 +72,19 @@ const RULE_SCHEMA = [
   { section: "Working Pattern" },
   { key: "week_pattern", label: "Week pattern",
     hint: "How many working days per week.",
-    type: "select", options: [["5day","5 days (Sat+Sun off)"],["6day","6 days (Sun off)"],["alt_sat","6 days, alternate Sat off"]] },
+    type: "select", options: [["5day","5 days (Sat+Sun off)"],["6day","6 days (Sun off)"],["alt_sat","6 days, alternate Sat off"],["roster","Roster (per-employee week-off)"]] },
   { key: "week_off_day", label: "Primary week-off day",
     hint: "Only used for 6-day pattern. 0=Mon … 6=Sun.",
     type: "select", options: [[0,"Monday"],[1,"Tuesday"],[2,"Wednesday"],[3,"Thursday"],[4,"Friday"],[5,"Saturday"],[6,"Sunday"]] },
   { key: "alt_sat_off_weeks", label: "Alt-Saturday off weeks",
     hint: "When pattern = alt_sat, which Saturdays (of the month) are off.",
     type: "csv_int", placeholder: "e.g. 2,4" },
+  { key: "roster_mode", label: "Roster mode",
+    hint: "If enabled, each employee has their own week-off day (set on the employee record). Overrides the week_off_day above.",
+    type: "bool" },
+  { key: "week_off_cap_percent", label: "Week-off cap %",
+    hint: "PRECEDES everything. total_weekoffs / total_days must be ≤ this %. Excess week-offs convert to Absent. 0 disables.",
+    type: "number", step: "0.1", min: 0 },
 
   { section: "Approved Leaves" },
   { key: "approved_leaves_per_month", label: "Approved leaves per month",
@@ -216,12 +244,14 @@ async function saveConfigJSON() {
 async function loadEmployees() {
   const id = $("#emp-location").value; if (!id) return;
   const emps = await api(`/api/employees?location_id=${id}`);
+  const DAY_NAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
   const rows = [
-    "<tr><th>Code</th><th>Name</th><th>Gender</th><th>Joining</th><th>Exit</th><th>Salary</th><th>Opening leave</th><th></th></tr>",
+    "<tr><th>Code</th><th>Title</th><th>Name</th><th>Gender</th><th>Joining</th><th>Exit</th><th>Salary</th><th>Opening leave</th><th>Week off</th><th></th></tr>",
     ...emps.map(e => `<tr>
-      <td>${e.emp_code}</td><td>${e.name}</td><td>${e.gender}</td>
+      <td>${e.emp_code}</td><td>${e.title||""}</td><td>${e.name}</td><td>${e.gender}</td>
       <td>${e.joining_date}</td><td>${e.exit_date||""}</td>
       <td>${e.monthly_salary}</td><td>${e.opening_leave}</td>
+      <td>${e.week_off_day != null ? DAY_NAMES[e.week_off_day] : ""}</td>
       <td>
         <button class="secondary" onclick='editEmp(${JSON.stringify(e)})'>Edit</button>
         <button class="danger" onclick='delEmp(${e.id})'>Delete</button>
@@ -234,9 +264,12 @@ function empForm(e) {
   const form = $("#emp-form");
   form.style.display = "";
   $("#emp-form-title").textContent = e.id ? "Edit employee" : "New employee";
-  for (const k of ["id","emp_code","name","gender","joining_date","exit_date","monthly_salary","opening_leave"]) {
-    form.querySelector(`[name=${k}]`).value = e[k] ?? "";
+  for (const k of ["id","emp_code","title","name","gender","joining_date","exit_date","monthly_salary","opening_leave"]) {
+    const el = form.querySelector(`[name=${k}]`);
+    if (el) el.value = e[k] ?? "";
   }
+  const wo = form.querySelector("[name=week_off_day]");
+  if (wo) wo.value = (e.week_off_day == null ? "" : String(e.week_off_day));
 }
 window.editEmp = e => empForm(e);
 window.delEmp = async id => {
@@ -248,15 +281,18 @@ $("#emp-new").onclick = () => empForm({});
 $("#emp-cancel").onclick = () => $("#emp-form").style.display = "none";
 $("#emp-save").onclick = async () => {
   const f = $("#emp-form");
+  const woRaw = f.querySelector("[name=week_off_day]").value;
   const body = {
     location_id: +$("#emp-location").value,
     emp_code: f.querySelector("[name=emp_code]").value,
+    title: f.querySelector("[name=title]").value || null,
     name: f.querySelector("[name=name]").value,
     gender: f.querySelector("[name=gender]").value,
     joining_date: f.querySelector("[name=joining_date]").value,
     exit_date: f.querySelector("[name=exit_date]").value || null,
     monthly_salary: +f.querySelector("[name=monthly_salary]").value || 0,
     opening_leave: +f.querySelector("[name=opening_leave]").value || 0,
+    week_off_day: woRaw === "" ? null : +woRaw,
   };
   const id = f.querySelector("[name=id]").value;
   if (id) await api(`/api/employees/${id}`, { method: "PUT", body: JSON.stringify(body) });
@@ -377,6 +413,66 @@ $("#att-save").onclick = async () => {
   alert("Saved.");
 };
 
+// ---------- Attendance tracker (P/A/W/H/L) ----------
+async function loadTracker() {
+  const loc = $("#trk-location").value;
+  const y = +$("#trk-year").value, m = +$("#trk-month").value;
+  if (!loc) return;
+  const data = await api(`/api/attendance/tracker?location_id=${loc}&year=${y}&month=${m}`);
+  const mm = String(m).padStart(2, "0");
+  const daysHdr = Array.from({length: data.dm}, (_, i) => {
+    const dd = String(i + 1).padStart(2, "0");
+    const holName = data.holidays[`${y}-${mm}-${dd}`];
+    return `<th class="${holName ? 'holiday' : ''}" title="${holName || ''}">${i + 1}</th>`;
+  }).join("");
+  const sumHdr = "<th>P</th><th>A</th><th>W</th><th>H</th><th>L</th>";
+  const rows = data.rows.map(r => {
+    const cells = r.days.map(c => {
+      const cls = c === "P" ? "trk-p" : c === "A" ? "trk-a" :
+                  c === "W" ? "trk-w" : c === "H" ? "trk-h" :
+                  c === "L" ? "trk-l" : "trk-o";
+      return `<td class="trk-cell ${cls}">${c}</td>`;
+    }).join("");
+    const s = r.summary;
+    return `<tr>
+      <td><b>${r.emp_code}</b><br><small>${r.title ? r.title + ' ' : ''}${r.name}</small></td>
+      ${cells}
+      <td>${s.P}</td><td>${s.A}</td><td>${s.W}</td><td>${s.H}</td><td>${s.L}</td>
+    </tr>`;
+  }).join("");
+  $("#trk-table").innerHTML =
+    `<thead><tr><th>Employee</th>${daysHdr}${sumHdr}</tr></thead><tbody>${rows}</tbody>`;
+}
+$("#trk-load").onclick = loadTracker;
+
+// ---------- Users (admin only) ----------
+async function loadUsers() {
+  try {
+    const list = await api("/api/users");
+    $("#usr-table").innerHTML = [
+      "<tr><th>Username</th><th>Role</th><th></th></tr>",
+      ...list.map(u => `<tr><td>${u.username}</td><td>${u.role}</td>
+        <td><button class="danger" onclick='delUser(${u.id})'>Delete</button></td></tr>`)
+    ].join("");
+  } catch (e) { /* non-admin — ignore */ }
+}
+window.delUser = async id => {
+  if (!confirm("Delete user?")) return;
+  await api(`/api/users/${id}`, { method: "DELETE" });
+  loadUsers();
+};
+if ($("#usr-add")) $("#usr-add").onclick = async () => {
+  const body = {
+    username: $("#usr-name").value.trim(),
+    password: $("#usr-pw").value,
+    role: $("#usr-role").value,
+  };
+  if (!body.username || !body.password) return alert("Username and password required");
+  await api("/api/users", { method: "POST", body: JSON.stringify(body) });
+  $("#usr-name").value = ""; $("#usr-pw").value = "";
+  loadUsers();
+};
+
 // ---------- Run payroll ----------
 async function runPayroll() {
   const body = { location_id: +$("#run-location").value, year: +$("#run-year").value, month: +$("#run-month").value };
@@ -384,13 +480,20 @@ async function runPayroll() {
   lastRunId = r.run_id;
   $("#dl-csv").disabled = false; $("#dl-xlsx").disabled = false;
 
-  const header = "<tr><th>Emp</th><th>Name</th><th>H</th><th>I</th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th><th>F</th><th>G</th><th>J</th><th>Approved</th><th>L close</th><th>Gross ₹</th><th>Flags / Notes / Checks</th></tr>";
+  const header = `<tr>
+    <th>Emp Code</th><th>Title</th><th>Name</th>
+    <th>Total Days</th><th>Payable Days</th>
+    <th>Present</th><th>Half Present</th><th>Week Off</th><th>Holiday</th>
+    <th>Leave</th><th>Half Leave</th><th>Absent</th><th>Holiday Work</th>
+    <th>Approved Leave</th><th>Closing Leave</th>
+    <th>Gross ₹</th><th>Flags / Notes / Checks</th>
+  </tr>`;
   const rows = r.results.map(x => {
     const flags = x.flags.map(f => `<span class="flag">${f}</span>`).join("");
     const notes = x.notes.map(n => `<span class="note">${n}</span>`).join("");
     const chks = x.checks.map(c => `<span class="${c.pass?'check-ok':'check-fail'}">${c.pass?'✓':'✗'} ${c.expr}</span>`).join("<br>");
     return `<tr>
-      <td>${x.employee.emp_code}</td><td>${x.employee.name}</td>
+      <td>${x.employee.emp_code}</td><td>${x.employee.title||""}</td><td>${x.employee.name}</td>
       <td>${x.H_total_days}</td><td>${x.I_payable_days}</td>
       <td>${x.counts.A}</td><td>${x.counts.B}</td><td>${x.counts.C}</td>
       <td>${x.counts.D}</td><td>${x.counts.E}</td><td>${x.counts.F}</td>
@@ -432,7 +535,10 @@ $("#hol-location").onchange = loadHolidays;
 
 async function refreshAll() {
   await loadLocations();
-  await loadLocationsTable();
+  if (ME && ME.is_admin) {
+    await loadLocationsTable();
+    await loadUsers();
+  }
   await loadEmployees();
   await loadHolidays();
   await loadConfig();

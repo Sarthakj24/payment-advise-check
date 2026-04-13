@@ -74,7 +74,7 @@ def logout(request: Request):
 @app.get("/api/auth/me")
 def me(user: models.User = Depends(auth.get_current_user)):
     return {"id": user.id, "username": user.username, "company_id": user.company_id,
-            "is_admin": user.is_admin}
+            "role": user.role, "is_admin": (user.role or "").lower() == "admin"}
 
 
 @app.post("/api/auth/register")
@@ -93,10 +93,49 @@ async def register(request: Request, db: Session = Depends(get_db)):
     comp = models.Company(name=company_name)
     db.add(comp); db.flush()
     user = models.User(company_id=comp.id, username=username,
-                       password_hash=auth.hash_password(password), is_admin=True)
+                       password_hash=auth.hash_password(password),
+                       role="admin", is_admin=True)
     db.add(user); db.commit()
     request.session["uid"] = user.id
-    return {"ok": True, "company_id": comp.id, "username": username}
+    return {"ok": True, "company_id": comp.id, "username": username, "role": "admin"}
+
+
+# ---------- User management (admin-only) ----------
+@app.get("/api/users", response_model=list[schemas.UserOut])
+def list_users(user: models.User = Depends(auth.require_admin),
+               db: Session = Depends(get_db)):
+    return db.query(models.User).filter_by(company_id=user.company_id).all()
+
+
+@app.post("/api/users", response_model=schemas.UserOut)
+def create_user(body: schemas.UserCreate,
+                user: models.User = Depends(auth.require_admin),
+                db: Session = Depends(get_db)):
+    if db.query(models.User).filter_by(username=body.username).first():
+        raise HTTPException(400, "Username taken")
+    role = (body.role or "kam").lower()
+    if role not in ("admin", "kam"):
+        raise HTTPException(400, "Role must be admin or kam")
+    u = models.User(
+        company_id=user.company_id, username=body.username,
+        password_hash=auth.hash_password(body.password),
+        role=role, is_admin=(role == "admin"),
+    )
+    db.add(u); db.commit(); db.refresh(u)
+    return u
+
+
+@app.delete("/api/users/{uid}")
+def delete_user(uid: int,
+                user: models.User = Depends(auth.require_admin),
+                db: Session = Depends(get_db)):
+    target = db.get(models.User, uid)
+    if not target or target.company_id != user.company_id:
+        raise HTTPException(404)
+    if target.id == user.id:
+        raise HTTPException(400, "Cannot delete self")
+    db.delete(target); db.commit()
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +161,7 @@ def default_config(user: models.User = Depends(auth.get_current_user)):
 # ---------------------------------------------------------------------------
 @app.post("/api/locations", response_model=schemas.LocationOut)
 def create_location(body: schemas.LocationIn,
-                    user: models.User = Depends(auth.get_current_user),
+                    user: models.User = Depends(auth.require_admin),
                     db: Session = Depends(get_db)):
     data = body.model_dump()
     data["company_id"] = user.company_id  # force scope
@@ -133,7 +172,7 @@ def create_location(body: schemas.LocationIn,
 
 @app.put("/api/locations/{loc_id}", response_model=schemas.LocationOut)
 def update_location(loc_id: int, body: schemas.LocationIn,
-                    user: models.User = Depends(auth.get_current_user),
+                    user: models.User = Depends(auth.require_admin),
                     db: Session = Depends(get_db)):
     loc = _owned_location(db, user, loc_id)
     for k, v in body.model_dump().items():
@@ -146,7 +185,7 @@ def update_location(loc_id: int, body: schemas.LocationIn,
 
 @app.delete("/api/locations/{loc_id}")
 def delete_location(loc_id: int,
-                    user: models.User = Depends(auth.get_current_user),
+                    user: models.User = Depends(auth.require_admin),
                     db: Session = Depends(get_db)):
     loc = _owned_location(db, user, loc_id)
     db.delete(loc); db.commit()
@@ -336,6 +375,67 @@ def get_attendance(location_id: int, year: int, month: int,
             "rows": grid}
 
 
+@app.get("/api/attendance/tracker")
+def attendance_tracker(location_id: int, year: int, month: int,
+                       user: models.User = Depends(auth.get_current_user),
+                       db: Session = Depends(get_db)):
+    """Simple tracker view: each cell is a single letter — P/A/W/H/L/—.
+
+    P = Present (A or B)
+    A = Absent (G)
+    W = Week-off (C)
+    H = Holiday (D)
+    L = Leave (E or F)
+    —  = out of employment window
+    """
+    from calendar import monthrange
+    loc = _owned_location(db, user, location_id)
+    dm = monthrange(year, month)[1]
+    first, last = date(year, month, 1), date(year, month, dm)
+    emps = db.query(models.Employee).filter_by(location_id=loc.id).all()
+    hols = {h.day: h.name for h in db.query(models.Holiday)
+            .filter(models.Holiday.location_id == loc.id,
+                    models.Holiday.day >= first, models.Holiday.day <= last).all()}
+    recs = {(r.employee_id, r.day): r for r in db.query(models.AttendanceRecord)
+            .filter(models.AttendanceRecord.day >= first,
+                    models.AttendanceRecord.day <= last,
+                    models.AttendanceRecord.employee_id.in_([e.id for e in emps])).all()}
+
+    def _tracker_letter(code: str) -> str:
+        return {"A": "P", "B": "P", "C": "W", "D": "H",
+                "E": "L", "F": "L", "G": "A"}.get(code, "")
+
+    rows = []
+    for e in emps:
+        summary = {"P": 0.0, "A": 0.0, "W": 0.0, "H": 0.0, "L": 0.0}
+        days = []
+        for d in range(1, dm + 1):
+            dt = date(year, month, d)
+            if (e.joining_date and dt < e.joining_date) or (e.exit_date and dt > e.exit_date):
+                days.append("—")
+                continue
+            r = recs.get((e.id, dt))
+            if not r:
+                days.append("")
+                continue
+            letter = _tracker_letter(r.code)
+            days.append(letter)
+            if letter == "P" and r.code == "B":
+                summary["P"] += 0.5
+            elif letter == "L" and r.code == "F":
+                summary["L"] += 0.5
+            elif letter in summary:
+                summary[letter] += 1
+        rows.append({
+            "employee_id": e.id, "emp_code": e.emp_code,
+            "title": e.title or "", "name": e.name, "gender": e.gender,
+            "days": days, "summary": summary,
+        })
+    return {"year": year, "month": month, "dm": dm,
+            "holidays": {k.isoformat(): v for k, v in hols.items()},
+            "rows": rows}
+
+
 @app.post("/api/attendance/save")
 async def save_attendance(request: Request,
                           user: models.User = Depends(auth.get_current_user),
@@ -400,8 +500,10 @@ def run_payroll(body: schemas.PayrollRunIn,
         payload = calculate_payroll(
             employee={
                 "emp_code": e.emp_code, "name": e.name, "gender": e.gender,
+                "title": e.title,
                 "joining_date": e.joining_date, "exit_date": e.exit_date,
                 "monthly_salary": e.monthly_salary, "opening_leave": e.opening_leave,
+                "week_off_day": e.week_off_day,
             },
             year=body.year, month=body.month, records=rec_dicts,
             rule_config=loc.rule_config,
@@ -434,13 +536,20 @@ def payroll_report(run_id: int, format: str = "csv",
         raise HTTPException(404)
     _owned_location(db, user, run.location_id)
     rows = [r.payload for r in run.results]
-    headers = ["emp_code", "name", "gender", "H", "I", "A", "B", "C", "D", "E", "F", "G", "J",
-               "approved_leave", "leave_bucket", "L_closing",
-               "monthly_salary", "per_day", "gross_payable", "flags", "notes"]
+    headers = [
+        "Emp Code", "Title", "Name", "Gender",
+        "Total Days", "Payable Days",
+        "Present", "Half Present", "Week Off", "Holiday",
+        "Leave", "Half Leave", "Absent", "Holiday Work",
+        "Approved Leave", "Leave Bucket", "Closing Leave",
+        "Monthly Salary", "Per Day", "Gross Payable",
+        "Flags", "Notes",
+    ]
 
     def _row_values(r):
         return [
-            r["employee"]["emp_code"], r["employee"]["name"], r["employee"]["gender"],
+            r["employee"]["emp_code"], r["employee"].get("title") or "",
+            r["employee"]["name"], r["employee"]["gender"],
             r["H_total_days"], r["I_payable_days"],
             r["counts"]["A"], r["counts"]["B"], r["counts"]["C"], r["counts"]["D"],
             r["counts"]["E"], r["counts"]["F"], r["counts"]["G"], r["counts"]["J"],

@@ -20,10 +20,12 @@
 <nav class="tabs">
   <button class="tab active" data-tab="run">Run Payroll</button>
   <button class="tab" data-tab="attendance">Attendance</button>
+  <button class="tab" data-tab="tracker">Tracker</button>
   <button class="tab" data-tab="employees">Employees</button>
-  <button class="tab" data-tab="locations">Locations</button>
+  <button class="tab" data-tab="locations" data-admin-only>Locations</button>
   <button class="tab" data-tab="holidays">Holidays</button>
   <button class="tab" data-tab="config">Rule Config</button>
+  <button class="tab" data-tab="users" data-admin-only>Users</button>
   <button class="tab" data-tab="upload">Upload CSV</button>
 </nav>
 
@@ -55,6 +57,30 @@
   <div class="table-wrap"><table id="att-table"></table></div>
 </section>
 
+<section id="tracker" class="panel">
+  <h2>Attendance Tracker</h2>
+  <p class="hint">Simple monthly view. <b>P</b>=Present · <b>A</b>=Absent · <b>W</b>=Week-off · <b>H</b>=Holiday · <b>L</b>=Leave · — = outside employment.</p>
+  <div class="row">
+    <label>Location <select id="trk-location"></select></label>
+    <label>Year <input id="trk-year" type="number" value="2025"/></label>
+    <label>Month <input id="trk-month" type="number" value="1" min="1" max="12"/></label>
+    <button id="trk-load">Load</button>
+  </div>
+  <div class="table-wrap"><table id="trk-table"></table></div>
+</section>
+
+<section id="users" class="panel">
+  <h2>Users</h2>
+  <p class="hint">Admin role: full access to locations, rules, and users. KAM role: view-only for locations and rules; can manage employees, attendance, and payroll.</p>
+  <div class="row">
+    <label>Username <input id="usr-name"></label>
+    <label>Password <input id="usr-pw" type="password"></label>
+    <label>Role <select id="usr-role"><option value="kam">KAM</option><option value="admin">Admin</option></select></label>
+    <button id="usr-add">Create user</button>
+  </div>
+  <div class="table-wrap"><table id="usr-table"></table></div>
+</section>
+
 <section id="employees" class="panel">
   <h2>Employees</h2>
   <div class="row">
@@ -69,12 +95,25 @@
     <input type="hidden" name="id"/>
     <div class="grid2">
       <label>Emp code <input name="emp_code" required></label>
+      <label>Title <input name="title" placeholder="Mr / Ms / Mrs / Dr"></label>
       <label>Name <input name="name" required></label>
       <label>Gender <select name="gender"><option>M</option><option>F</option><option>O</option></select></label>
       <label>Joining date <input name="joining_date" type="date" required></label>
       <label>Exit date <input name="exit_date" type="date"></label>
       <label>Monthly salary <input name="monthly_salary" type="number" step="0.01" value="0"></label>
       <label>Opening leave <input name="opening_leave" type="number" step="0.5" value="0"></label>
+      <label>Week-off day (roster mode)
+        <select name="week_off_day">
+          <option value="">— location default —</option>
+          <option value="0">Monday</option>
+          <option value="1">Tuesday</option>
+          <option value="2">Wednesday</option>
+          <option value="3">Thursday</option>
+          <option value="4">Friday</option>
+          <option value="5">Saturday</option>
+          <option value="6">Sunday</option>
+        </select>
+      </label>
     </div>
     <div class="row">
       <button id="emp-save">Save</button>
