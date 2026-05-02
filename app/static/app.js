@@ -588,6 +588,16 @@ $("#cfg-save-json").onclick = saveConfigJSON;
 $("#emp-reload").onclick = loadEmployees;
 $("#loc-reload").onclick = loadLocationsTable;
 $("#up-btn").onclick = uploadAttendance;
+$("#up-tmpl-csv").onclick = () => {
+  const loc = $("#up-location").value, y = $("#up-year").value, m = $("#up-month").value;
+  if (!loc) return alert("Pick a location");
+  location.href = `/api/attendance/upload-template?location_id=${loc}&year=${y}&month=${m}&fmt=csv`;
+};
+$("#up-tmpl-xlsx").onclick = () => {
+  const loc = $("#up-location").value, y = $("#up-year").value, m = $("#up-month").value;
+  if (!loc) return alert("Pick a location");
+  location.href = `/api/attendance/upload-template?location_id=${loc}&year=${y}&month=${m}&fmt=xlsx`;
+};
 $("#dl-csv").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=csv`; };
 $("#dl-xlsx").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=xlsx`; };
 $("#dl-checked").onclick = () => { if(lastRunId) location.href = `/api/payroll/checked-report?run_id=${lastRunId}`; };

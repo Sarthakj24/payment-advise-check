@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Attendance Payroll Calculator</title>
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
 <header>
@@ -179,16 +179,22 @@
 <section id="upload" class="panel">
   <h2>Upload Vendor Attendance</h2>
   <p class="hint">Upload the vendor's wide-format sheet (CSV or XLSX).<br>
-    Expected columns: <b>Month, Vendor, Employee Name, Designation, Date of Joining, Current Status, Date of Exit, 1, 2, 3, … 31</b><br>
+    Expected columns: <b>Month, Vendor, Emp Code, Employee Name, Designation, Gender, Date of Joining, Current Status, Date of Exit, 1, 2, 3, … 31</b><br>
     Day codes (e.g. P, WO, H, L, A) are mapped via the <b>Vendor Code Map</b> in Rule Config. Employees not found will be auto-created.</p>
   <div class="row">
     <label>Location <select id="up-location"></select></label>
-    <input id="up-file" type="file" accept=".csv,.xlsx,.xls" />
+    <label>Year <input id="up-year" type="number" value="2025" style="width:90px"/></label>
+    <label>Month <input id="up-month" type="number" value="1" min="1" max="12" style="width:70px"/></label>
+    <button id="up-tmpl-csv" class="secondary">Download CSV template</button>
+    <button id="up-tmpl-xlsx" class="secondary">Download Excel template</button>
+  </div>
+  <div class="row">
+    <label>File <input id="up-file" type="file" accept=".csv,.xlsx,.xls" /></label>
     <button id="up-btn">Upload</button>
   </div>
   <pre id="up-result"></pre>
 </section>
 
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>

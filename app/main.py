@@ -308,6 +308,79 @@ def delete_holiday(hid: int,
 # ---------------------------------------------------------------------------
 # Attendance
 # ---------------------------------------------------------------------------
+@app.get("/api/attendance/upload-template")
+def upload_template(location_id: int, year: int = 0, month: int = 0,
+                    fmt: str = "csv",
+                    user: models.User = Depends(auth.get_current_user),
+                    db: Session = Depends(get_db)):
+    """Download a blank wide-format template (CSV or XLSX) pre-filled with
+    this location's existing employees so the vendor can fill in days 1-31."""
+    from calendar import monthrange
+    from .engine.calculator import _merge, DEFAULT_RULE_CONFIG
+
+    loc = _owned_location(db, user, location_id)
+    cfg = _merge(DEFAULT_RULE_CONFIG, loc.rule_config)
+    code_map = cfg.get("vendor_code_map", {})
+
+    if not year or not month:
+        today = date.today()
+        year, month = today.year, today.month
+    dm = monthrange(year, month)[1]
+
+    info_headers = ["Month", "Vendor", "Emp Code", "Employee Name", "Designation",
+                    "Gender", "Date of Joining", "Current Status", "Date of Exit"]
+    day_headers = [str(d) for d in range(1, dm + 1)]
+    headers = info_headers + day_headers
+
+    month_label = date(year, month, 1).strftime("%b-%y")
+    employees = db.query(models.Employee).filter_by(location_id=loc.id).all()
+
+    rows = []
+    for e in employees:
+        status = "Exited" if e.exit_date else "Active"
+        rows.append([
+            month_label, loc.code, e.emp_code, e.name, e.title or "", e.gender,
+            e.joining_date.strftime("%d-%b-%y") if e.joining_date else "",
+            status,
+            e.exit_date.strftime("%d-%b-%y") if e.exit_date else "",
+        ] + [""] * dm)
+
+    legend = "Vendor codes: " + ", ".join(f"{k}={v}" for k, v in code_map.items()) + \
+             " (internal: A=Present, B=Half Present, C=Week Off, D=Holiday, E=Leave, F=Half Leave, G=Absent)"
+
+    if fmt == "xlsx":
+        from openpyxl import Workbook
+        from openpyxl.styles import PatternFill, Font, Alignment
+        wb = Workbook(); ws = wb.active; ws.title = "Attendance Upload"
+        ws.append(headers)
+        hdr_fill = PatternFill("solid", fgColor="D9E1F2")
+        for ci in range(1, len(headers) + 1):
+            c = ws.cell(1, ci); c.fill = hdr_fill; c.font = Font(bold=True, size=9)
+            c.alignment = Alignment(horizontal="center")
+        for r in rows: ws.append(r)
+        ws.append([])
+        ws.append([legend])
+        for ci in range(1, len(info_headers) + 1):
+            ws.column_dimensions[ws.cell(1, ci).column_letter].width = 14
+        for ci in range(len(info_headers) + 1, len(headers) + 1):
+            ws.column_dimensions[ws.cell(1, ci).column_letter].width = 4.5
+        buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+        fname = f"attendance_template_{loc.code}_{year}_{month:02d}.xlsx"
+        return StreamingResponse(buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename={fname}'})
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(headers)
+    for r in rows: w.writerow(r)
+    w.writerow([])
+    w.writerow([legend])
+    fname = f"attendance_template_{loc.code}_{year}_{month:02d}.csv"
+    return StreamingResponse(iter([out.getvalue()]), media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename={fname}'})
+
+
 @app.post("/api/attendance/upload")
 async def upload_attendance(
     location_id: int = Form(...),
