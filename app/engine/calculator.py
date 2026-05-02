@@ -53,6 +53,18 @@ DEFAULT_RULE_CONFIG: dict[str, Any] = {
     "checks": [
         "N - E + approved_leave == L",
     ],
+
+    # Vendor upload code mapping: maps the vendor's attendance codes
+    # to internal codes (A/B/C/D/E/F/G). Configurable per client.
+    "vendor_code_map": {
+        "P": "A",
+        "HD": "B",
+        "WO": "C",
+        "H": "D",
+        "L": "E",
+        "HL": "F",
+        "A": "G",
+    },
 }
 
 

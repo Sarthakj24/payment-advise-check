@@ -137,6 +137,15 @@ const RULE_SCHEMA = [
     hint: "Flag employees with a streak of N or more leave days. 0 disables.",
     type: "number", step: 1, min: 0 },
 
+  { section: "Vendor Upload Code Mapping" },
+  { key: "vendor_code_map.P",  label: "Vendor 'P' maps to",  hint: "Typically A (Present).",           type: "text" },
+  { key: "vendor_code_map.HD", label: "Vendor 'HD' maps to", hint: "Typically B (Half-day Present).",  type: "text" },
+  { key: "vendor_code_map.WO", label: "Vendor 'WO' maps to", hint: "Typically C (Week Off).",          type: "text" },
+  { key: "vendor_code_map.H",  label: "Vendor 'H' maps to",  hint: "Typically D (Holiday).",           type: "text" },
+  { key: "vendor_code_map.L",  label: "Vendor 'L' maps to",  hint: "Typically E (Leave Full Day).",    type: "text" },
+  { key: "vendor_code_map.HL", label: "Vendor 'HL' maps to", hint: "Typically F (Half Leave).",        type: "text" },
+  { key: "vendor_code_map.A",  label: "Vendor 'A' maps to",  hint: "Typically G (Absent).",            type: "text" },
+
   { section: "Custom Checks" },
   { key: "checks", label: "Validation formulas",
     hint: "One expression per line. Variables: A,B,C,D,E,F,G,J,H,I,N,L,M,approved_leave,leave_bucket,DM,LD. Example: H == DM",
@@ -523,7 +532,7 @@ async function runPayroll() {
   const body = { location_id: +$("#run-location").value, year: +$("#run-year").value, month: +$("#run-month").value };
   const r = await api("/api/payroll/run", { method: "POST", body: JSON.stringify(body) });
   lastRunId = r.run_id;
-  $("#dl-csv").disabled = false; $("#dl-xlsx").disabled = false;
+  $("#dl-csv").disabled = false; $("#dl-xlsx").disabled = false; $("#dl-checked").disabled = false;
 
   const header = `<tr>
     <th>Emp Code</th><th>Title</th><th>Name</th>
@@ -553,15 +562,22 @@ async function runPayroll() {
   $("#run-raw").textContent = JSON.stringify(r, null, 2);
 }
 
-// ---------- CSV upload ----------
+// ---------- Vendor upload (wide format) ----------
 async function uploadAttendance() {
   const file = $("#up-file").files[0];
   if (!file) { alert("Pick a file"); return; }
   const fd = new FormData();
   fd.append("location_id", $("#up-location").value);
   fd.append("file", file);
-  const r = await fetch("/api/attendance/upload", { method: "POST", body: fd });
-  $("#up-result").textContent = await r.text();
+  try {
+    const r = await fetch("/api/attendance/upload-wide", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) { $("#up-result").textContent = "Error: " + (data.detail || JSON.stringify(data)); return; }
+    let msg = `Rows processed: ${data.rows_processed}\nEmployees created: ${data.employees_created}\nAttendance saved: ${data.attendance_saved}`;
+    if (data.skipped && data.skipped.length) msg += "\n\nSkipped:\n" + data.skipped.join("\n");
+    $("#up-result").textContent = msg;
+    refreshAll();
+  } catch (e) { $("#up-result").textContent = "Error: " + e.message; }
 }
 
 // ---------- Wire up ----------
@@ -574,6 +590,7 @@ $("#loc-reload").onclick = loadLocationsTable;
 $("#up-btn").onclick = uploadAttendance;
 $("#dl-csv").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=csv`; };
 $("#dl-xlsx").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=xlsx`; };
+$("#dl-checked").onclick = () => { if(lastRunId) location.href = `/api/payroll/checked-report?run_id=${lastRunId}`; };
 $("#cfg-location").onchange = loadConfig;
 $("#emp-location").onchange = loadEmployees;
 $("#hol-location").onchange = loadHolidays;

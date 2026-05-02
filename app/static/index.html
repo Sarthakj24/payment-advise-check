@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Attendance Payroll Calculator</title>
-<link rel="stylesheet" href="/static/style.css?v=6">
+<link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <header>
@@ -38,6 +38,7 @@
     <button id="run-btn">Run</button>
     <button id="dl-csv" disabled>Download CSV</button>
     <button id="dl-xlsx" disabled>Download Excel</button>
+    <button id="dl-checked" disabled class="secondary">Download Checked Report</button>
   </div>
   <div id="run-summary"></div>
   <div class="table-wrap"><table id="run-table"></table></div>
@@ -176,17 +177,18 @@
 </section>
 
 <section id="upload" class="panel">
-  <h2>Upload Attendance CSV</h2>
-  <p class="hint">CSV columns: <code>emp_code,day,code,worked_on_holiday</code>.
-    Codes: A=Present · B=Half · C=Week Off · D=Holiday · E=Leave · F=Half Leave · G=Absent.</p>
+  <h2>Upload Vendor Attendance</h2>
+  <p class="hint">Upload the vendor's wide-format sheet (CSV or XLSX).<br>
+    Expected columns: <b>Month, Vendor, Employee Name, Designation, Date of Joining, Current Status, Date of Exit, 1, 2, 3, … 31</b><br>
+    Day codes (e.g. P, WO, H, L, A) are mapped via the <b>Vendor Code Map</b> in Rule Config. Employees not found will be auto-created.</p>
   <div class="row">
     <label>Location <select id="up-location"></select></label>
-    <input id="up-file" type="file" accept=".csv" />
+    <input id="up-file" type="file" accept=".csv,.xlsx,.xls" />
     <button id="up-btn">Upload</button>
   </div>
   <pre id="up-result"></pre>
 </section>
 
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>
