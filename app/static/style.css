@@ -71,26 +71,49 @@ pre { background: #0b1220; color: #e5e7eb; padding: 1rem; border-radius: 6px;
 .cfg-value input[type=checkbox] { width: auto; }
 .cfg-hdr { grid-column: 1 / -1; background: #111827; color: #fff; padding: .4rem .75rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .5px; }
 
-.trk-cell { text-align: center; font-weight: 600; font-size: .8rem; width: 22px; padding: .3rem 0; }
+/* Tracker — compact read-only Excel-style grid */
+#trk-table { table-layout: fixed; border-collapse: collapse; }
+#trk-table th { font-size: .7rem; padding: .3rem .15rem; text-align: center; background: #f3f4f6; border: 1px solid #d1d5db; }
+#trk-table td { border: 1px solid #d1d5db; padding: 0; }
+#trk-table th:first-child { text-align: left; min-width: 140px; width: 140px; padding: .3rem .5rem; }
+#trk-table td:first-child { text-align: left; padding: .2rem .5rem; white-space: nowrap; font-size: .78rem; }
+#trk-table th.trk-sum { background: #e0e7ff; font-size: .65rem; }
+#trk-table th.holiday { background: #fed7aa; }
+.trk-cell { text-align: center; font-weight: 600; font-size: .78rem; padding: .3rem .15rem !important; }
 .trk-cell.trk-p { background: #dcfce7; color: #166534; }
 .trk-cell.trk-a { background: #fee2e2; color: #991b1b; }
 .trk-cell.trk-w { background: #dbeafe; color: #1e40af; }
 .trk-cell.trk-h { background: #fed7aa; color: #9a3412; }
 .trk-cell.trk-l { background: #fef3c7; color: #92400e; }
 .trk-cell.trk-o { background: #f3f4f6; color: #9ca3af; }
-#trk-table th.holiday { background: #fed7aa; }
+.trk-sum-cell { text-align: center; font-weight: 600; font-size: .8rem; padding: .3rem .25rem !important; background: #f8fafc; }
 
-/* Attendance grid — keep TDs as table-cells; layout children inside with a flex wrapper */
-#att-table { table-layout: fixed; }
-#att-table th, #att-table td { padding: .25rem .3rem; white-space: nowrap; text-align: center; }
-#att-table th:first-child, #att-table td:first-child { text-align: left; min-width: 180px; }
-.att-cell { padding: .25rem; }
-.att-cell .att-wrap { display: inline-flex; align-items: center; gap: 2px; justify-content: center; }
-.att-cell select { padding: 1px; width: 46px; font-size: .75rem; }
-.att-cell input[type=checkbox] { margin: 0; }
-.att-cell.holiday { background: #fff7ed; }
-.att-cell.weekoff { background: #eff6ff; }
-.att-cell.oow { background: #f3f4f6; color: #9ca3af; }
+/* Attendance grid — compact Excel-style with color-coded cells */
+#att-table { table-layout: fixed; border-collapse: collapse; }
+#att-table th { font-size: .7rem; padding: .3rem .15rem; text-align: center; background: #f3f4f6; border: 1px solid #d1d5db; }
+#att-table td { padding: 0; text-align: center; border: 1px solid #d1d5db; }
+#att-table th:first-child { text-align: left; min-width: 140px; width: 140px; padding: .3rem .5rem; }
+#att-table td:first-child { text-align: left; padding: .2rem .5rem; white-space: nowrap; font-size: .78rem; }
+#att-table th.att-sun { background: #dbeafe; }
+#att-table th.att-hol { background: #fed7aa; }
+.att-cell { padding: 0 !important; position: relative; }
+.att-cell select {
+  width: 100%; border: 0; border-radius: 0; padding: .35rem .1rem;
+  font-size: .75rem; font-weight: 600; text-align: center;
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+  background: transparent; color: inherit;
+}
+.att-cell select:focus { outline: 2px solid #2563eb; outline-offset: -2px; z-index: 1; }
+.att-cell .att-hol-chk { position: absolute; bottom: 0; right: 0; width: 10px; height: 10px; margin: 0; }
+/* Color-code each attendance code */
+.att-code-A { background: #dcfce7; color: #166534; }
+.att-code-B { background: #bbf7d0; color: #15803d; }
+.att-code-C { background: #dbeafe; color: #1e40af; }
+.att-code-D { background: #fed7aa; color: #9a3412; }
+.att-code-E { background: #fef3c7; color: #92400e; }
+.att-code-F { background: #fde68a; color: #92400e; }
+.att-code-G { background: #fee2e2; color: #991b1b; }
+.att-code-empty { background: #f3f4f6; color: #9ca3af; }
 
 /* Login */
 .login-body { display: flex; align-items: center; justify-content: center;

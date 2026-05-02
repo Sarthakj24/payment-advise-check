@@ -388,42 +388,58 @@ $("#hol-add").onclick = async () => {
 };
 
 // ---------- Attendance grid ----------
-// Each code paired with its human-readable name from the spec.
-const CODE_LABELS = {
-  "":  "—",
-  "A": "Present",
-  "B": "Half Present",
-  "C": "Week Off",
-  "D": "Holiday",
-  "E": "Leave",
-  "F": "Half Leave",
-  "G": "Absent",
-};
-const CODES = Object.keys(CODE_LABELS);
+const CODES = ["", "A", "B", "C", "D", "E", "F", "G"];
+const CODE_NAMES = {"":"—","A":"Present","B":"Half Day","C":"Week Off","D":"Holiday","E":"Leave","F":"Half Leave","G":"Absent"};
+const DAYNAMES = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+
+function _attCellClass(code) {
+  return code ? `att-code-${code}` : "att-code-empty";
+}
+
 async function loadAttendance() {
   const body = { location_id: +$("#att-location").value,
                  year: +$("#att-year").value, month: +$("#att-month").value };
   const data = await api(`/api/attendance?location_id=${body.location_id}&year=${body.year}&month=${body.month}`);
   lastGrid = data;
-  const dayHdr = Array.from({length: data.dm}, (_, i) =>
-    `<th title="${data.holidays[`${body.year}-${String(body.month).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`]||''}">${i+1}</th>`).join("");
+  const mm = String(body.month).padStart(2, "0");
+
+  // Build day header: number + day-of-week abbreviation
+  const dayHdr = Array.from({length: data.dm}, (_, i) => {
+    const dd = String(i + 1).padStart(2, "0");
+    const dt = new Date(body.year, body.month - 1, i + 1);
+    const wd = dt.getDay(); // 0=Sun
+    const holName = data.holidays[`${body.year}-${mm}-${dd}`] || "";
+    const cls = holName ? "att-hol" : wd === 0 ? "att-sun" : "";
+    return `<th class="${cls}" title="${holName}">${i+1}<br><small>${DAYNAMES[(wd+6)%7]}</small></th>`;
+  }).join("");
+
   const rows = data.rows.map((row, ri) => {
     const cells = row.days.map((d, di) => {
-      const klass = d.holiday_name ? "holiday" : d.code === "C" ? "weekoff" : d.code === "" ? "oow" : "";
-      const opts = CODES.map(c => `<option value="${c}"${c===d.code?" selected":""}>${c ? `${c} — ${CODE_LABELS[c]}` : "—"}</option>`).join("");
-      const chk = (d.code==="C"||d.code==="D") ? `<input type=checkbox data-r=${ri} data-d=${di} ${d.worked_on_holiday?"checked":""} title="Worked on holiday/week-off">` : "";
-      return `<td class="att-cell ${klass}"><div class="att-wrap"><select data-r=${ri} data-d=${di}>${opts}</select>${chk}</div></td>`;
+      const opts = CODES.map(c =>
+        `<option value="${c}"${c===d.code?" selected":""}>${c||"—"}</option>`
+      ).join("");
+      const chk = (d.code==="C"||d.code==="D")
+        ? `<input type=checkbox class="att-hol-chk" data-r=${ri} data-d=${di} ${d.worked_on_holiday?"checked":""} title="Worked?">`
+        : "";
+      return `<td class="att-cell ${_attCellClass(d.code)}"><select data-r=${ri} data-d=${di}>${opts}</select>${chk}</td>`;
     }).join("");
     return `<tr><td><b>${row.emp_code}</b><br><small>${row.name}</small></td>${cells}</tr>`;
   }).join("");
+
   $("#att-table").innerHTML = `<thead><tr><th>Employee</th>${dayHdr}</tr></thead><tbody>${rows}</tbody>`;
 
-  $$("#att-table select").forEach(s => s.onchange = e => {
-    const r = +e.target.dataset.r, d = +e.target.dataset.d;
-    lastGrid.rows[r].days[d].code = e.target.value;
-    loadAttendance._dirty = true;
+  // Wire up change handlers — update data + color
+  $$("#att-table select").forEach(s => {
+    s.onchange = e => {
+      const r = +e.target.dataset.r, d = +e.target.dataset.d;
+      const code = e.target.value;
+      lastGrid.rows[r].days[d].code = code;
+      loadAttendance._dirty = true;
+      const td = e.target.closest("td");
+      td.className = `att-cell ${_attCellClass(code)}`;
+    };
   });
-  $$("#att-table input[type=checkbox]").forEach(c => c.onchange = e => {
+  $$("#att-table .att-hol-chk").forEach(c => c.onchange = e => {
     const r = +e.target.dataset.r, d = +e.target.dataset.d;
     lastGrid.rows[r].days[d].worked_on_holiday = e.target.checked;
     loadAttendance._dirty = true;
@@ -446,10 +462,13 @@ async function loadTracker() {
   const mm = String(m).padStart(2, "0");
   const daysHdr = Array.from({length: data.dm}, (_, i) => {
     const dd = String(i + 1).padStart(2, "0");
-    const holName = data.holidays[`${y}-${mm}-${dd}`];
-    return `<th class="${holName ? 'holiday' : ''}" title="${holName || ''}">${i + 1}</th>`;
+    const dt = new Date(y, m - 1, i + 1);
+    const wd = dt.getDay();
+    const holName = data.holidays[`${y}-${mm}-${dd}`] || "";
+    const cls = holName ? "holiday" : wd === 0 ? "att-sun" : "";
+    return `<th class="${cls}" title="${holName}">${i+1}<br><small>${DAYNAMES[(wd+6)%7]}</small></th>`;
   }).join("");
-  const sumHdr = "<th>Present</th><th>Absent</th><th>Week Off</th><th>Holiday</th><th>Leave</th>";
+  const sumHdr = `<th class="trk-sum">Present</th><th class="trk-sum">Absent</th><th class="trk-sum">Week Off</th><th class="trk-sum">Holiday</th><th class="trk-sum">Leave</th>`;
   const rows = data.rows.map(r => {
     const cells = r.days.map(c => {
       const cls = c === "P" ? "trk-p" : c === "A" ? "trk-a" :
@@ -461,7 +480,9 @@ async function loadTracker() {
     return `<tr>
       <td><b>${r.emp_code}</b><br><small>${r.title ? r.title + ' ' : ''}${r.name}</small></td>
       ${cells}
-      <td>${s.P}</td><td>${s.A}</td><td>${s.W}</td><td>${s.H}</td><td>${s.L}</td>
+      <td class="trk-sum-cell">${s.P}</td><td class="trk-sum-cell">${s.A}</td>
+      <td class="trk-sum-cell">${s.W}</td><td class="trk-sum-cell">${s.H}</td>
+      <td class="trk-sum-cell">${s.L}</td>
     </tr>`;
   }).join("");
   $("#trk-table").innerHTML =
