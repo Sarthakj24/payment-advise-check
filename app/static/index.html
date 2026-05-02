@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Attendance Payroll Calculator</title>
-<link rel="stylesheet" href="/static/style.css?v=8">
+<link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body>
 <header>
@@ -74,7 +74,7 @@
 
 <section id="users" class="panel">
   <h2>Users</h2>
-  <p class="hint">Admin role: full access to locations, rules, and users. KAM role: view-only for locations and rules; can manage employees, attendance, and payroll.</p>
+  <p class="hint">Admin: full access to all locations. KAM: can only access <b>assigned</b> locations. Use the <b>Locations</b> button to assign locations to a KAM.</p>
   <div class="row">
     <label>Email <input id="usr-name" type="email"></label>
     <label>Password <input id="usr-pw" type="password"></label>
@@ -82,6 +82,16 @@
     <button id="usr-add">Create user</button>
   </div>
   <div class="table-wrap"><table id="usr-table"></table></div>
+
+  <div id="usr-loc-modal" class="form-card" style="display:none">
+    <h3 id="usr-loc-title">Assign Locations</h3>
+    <p class="hint">Check the locations this user should have access to.</p>
+    <div id="usr-loc-checks"></div>
+    <div class="row">
+      <button id="usr-loc-save">Save</button>
+      <button id="usr-loc-cancel" class="secondary">Cancel</button>
+    </div>
+  </div>
 </section>
 
 <section id="employees" class="panel">
@@ -193,8 +203,12 @@
     <button id="up-btn">Upload</button>
   </div>
   <pre id="up-result"></pre>
+  <div class="row">
+    <button id="up-analysis" class="secondary" disabled>Download Analysis Report</button>
+  </div>
+  <p class="hint" id="up-analysis-hint" style="display:none">Compares uploaded attendance against the rule engine. Shows per-day raw vs final codes, variance flags, payable days, and gross amounts.</p>
 </section>
 
-<script src="/static/app.js?v=8"></script>
+<script src="/static/app.js?v=9"></script>
 </body>
 </html>

@@ -26,6 +26,14 @@ class User(Base):
     company = relationship("Company", back_populates="users")
 
 
+class UserLocation(Base):
+    __tablename__ = "user_locations"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    location_id = Column(Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "location_id", name="uix_user_loc"),)
+
+
 class Holiday(Base):
     __tablename__ = "holidays"
     id = Column(Integer, primary_key=True)

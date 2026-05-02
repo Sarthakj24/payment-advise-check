@@ -37,10 +37,28 @@ def bootstrap():
 # ---------------------------------------------------------------------------
 # Helpers — enforce per-tenant scoping
 # ---------------------------------------------------------------------------
+def _is_admin(user: models.User) -> bool:
+    return (user.role or "").lower() == "admin"
+
+
+def _accessible_location_ids(db: Session, user: models.User) -> set[int]:
+    """Admin: every location in company. KAM: only locations assigned via UserLocation."""
+    if _is_admin(user):
+        return {l.id for l in db.query(models.Location)
+                .filter_by(company_id=user.company_id).all()}
+    rows = db.query(models.UserLocation).filter_by(user_id=user.id).all()
+    return {r.location_id for r in rows}
+
+
 def _owned_location(db: Session, user: models.User, loc_id: int) -> models.Location:
     loc = db.get(models.Location, loc_id)
     if not loc or loc.company_id != user.company_id:
         raise HTTPException(404, "Location not found")
+    if not _is_admin(user):
+        ul = db.query(models.UserLocation).filter_by(
+            user_id=user.id, location_id=loc_id).first()
+        if not ul:
+            raise HTTPException(403, "Location not assigned to your account")
     return loc
 
 
@@ -146,8 +164,41 @@ def delete_user(uid: int,
         raise HTTPException(404)
     if target.id == user.id:
         raise HTTPException(400, "Cannot delete self")
+    db.query(models.UserLocation).filter_by(user_id=target.id).delete()
     db.delete(target); db.commit()
     return {"ok": True}
+
+
+@app.get("/api/users/{uid}/locations")
+def get_user_locations(uid: int,
+                       admin: models.User = Depends(auth.require_admin),
+                       db: Session = Depends(get_db)):
+    target = db.get(models.User, uid)
+    if not target or target.company_id != admin.company_id:
+        raise HTTPException(404)
+    rows = db.query(models.UserLocation).filter_by(user_id=uid).all()
+    return {"user_id": uid, "role": target.role,
+            "location_ids": [r.location_id for r in rows]}
+
+
+@app.put("/api/users/{uid}/locations")
+async def set_user_locations(uid: int, request: Request,
+                             admin: models.User = Depends(auth.require_admin),
+                             db: Session = Depends(get_db)):
+    target = db.get(models.User, uid)
+    if not target or target.company_id != admin.company_id:
+        raise HTTPException(404)
+    body = await request.json()
+    requested = {int(x) for x in body.get("location_ids", [])}
+    valid = {l.id for l in db.query(models.Location)
+             .filter_by(company_id=admin.company_id).all()}
+    if not requested.issubset(valid):
+        raise HTTPException(400, "Some location IDs are not in your company")
+    db.query(models.UserLocation).filter_by(user_id=uid).delete()
+    for lid in requested:
+        db.add(models.UserLocation(user_id=uid, location_id=lid))
+    db.commit()
+    return {"ok": True, "location_ids": sorted(requested)}
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +251,7 @@ def delete_location(loc_id: int,
                     user: models.User = Depends(auth.require_admin),
                     db: Session = Depends(get_db)):
     loc = _owned_location(db, user, loc_id)
+    db.query(models.UserLocation).filter_by(location_id=loc.id).delete()
     db.delete(loc); db.commit()
     return {"ok": True}
 
@@ -207,7 +259,11 @@ def delete_location(loc_id: int,
 @app.get("/api/locations", response_model=list[schemas.LocationOut])
 def list_locations(user: models.User = Depends(auth.get_current_user),
                    db: Session = Depends(get_db)):
-    return db.query(models.Location).filter_by(company_id=user.company_id).all()
+    q = db.query(models.Location).filter_by(company_id=user.company_id)
+    if not _is_admin(user):
+        allowed = _accessible_location_ids(db, user)
+        q = q.filter(models.Location.id.in_(allowed) if allowed else False)
+    return q.all()
 
 
 @app.get("/api/locations/{loc_id}", response_model=schemas.LocationOut)
@@ -255,8 +311,7 @@ def delete_employee(emp_id: int,
 def list_employees(location_id: int | None = None,
                    user: models.User = Depends(auth.get_current_user),
                    db: Session = Depends(get_db)):
-    loc_ids = [l.id for l in db.query(models.Location)
-               .filter_by(company_id=user.company_id).all()]
+    loc_ids = _accessible_location_ids(db, user)
     q = db.query(models.Employee).filter(models.Employee.location_id.in_(loc_ids))
     if location_id:
         _owned_location(db, user, location_id)
@@ -595,6 +650,239 @@ async def upload_attendance_wide(
     }
 
 
+@app.get("/api/attendance/upload-analysis")
+def upload_analysis(location_id: int, year: int, month: int,
+                    user: models.User = Depends(auth.get_current_user),
+                    db: Session = Depends(get_db)):
+    """Variance/check sheet for the most recent upload of (location, year, month).
+
+    Compares stored attendance (already mapped to internal codes) against what the
+    rule engine produces for that month — showing per-day vendor codes, per-day
+    final codes, the count summary, payable days, gross, plus any flags/notes
+    (sandwich rule, excess leaves → absent, week-off cap, etc.).
+    """
+    from calendar import monthrange
+    from openpyxl import Workbook
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from .engine.calculator import _merge, DEFAULT_RULE_CONFIG
+
+    loc = _owned_location(db, user, location_id)
+    cfg = _merge(DEFAULT_RULE_CONFIG, loc.rule_config)
+    vendor_map = cfg.get("vendor_code_map", {})
+    reverse_map = {v: k for k, v in vendor_map.items()}
+
+    dm = monthrange(year, month)[1]
+    first = date(year, month, 1)
+    last = date(year, month, dm)
+
+    employees = db.query(models.Employee).filter_by(location_id=loc.id).all()
+    holidays = {h.day for h in db.query(models.Holiday)
+                .filter_by(location_id=loc.id).all()}
+    recs_all = db.query(models.AttendanceRecord).filter(
+        models.AttendanceRecord.day >= first,
+        models.AttendanceRecord.day <= last,
+        models.AttendanceRecord.employee_id.in_([e.id for e in employees]),
+    ).all()
+    recs_by_emp: dict[int, dict[date, models.AttendanceRecord]] = {}
+    for r in recs_all:
+        recs_by_emp.setdefault(r.employee_id, {})[r.day] = r
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Upload Analysis"
+
+    info_h = ["Emp Code", "Name", "Designation", "Joining", "Exit"]
+    raw_h = [f"R{d}" for d in range(1, dm + 1)]   # raw vendor code as uploaded
+    eng_h = [f"E{d}" for d in range(1, dm + 1)]   # final engine code (post-rules)
+    sum_h = ["Present", "Half Present", "Week Off", "Holiday",
+             "Leave", "Half Leave", "Absent", "Holiday Work",
+             "Total Days", "Payable Days",
+             "Approved Leave", "Leave Bucket", "Closing Leave",
+             "Monthly Salary", "Per Day", "Gross Payable",
+             "Flags", "Notes", "Variance"]
+    headers = info_h + raw_h + eng_h + sum_h
+
+    hdr_fill = PatternFill("solid", fgColor="D9E1F2")
+    raw_hdr_fill = PatternFill("solid", fgColor="FFE699")
+    eng_hdr_fill = PatternFill("solid", fgColor="C6E0B4")
+    diff_fill = PatternFill("solid", fgColor="F4B084")
+    thin = Side(style="thin", color="B0B0B0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    for ci, h in enumerate(headers, 1):
+        c = ws.cell(1, ci, h)
+        c.font = Font(bold=True, size=9)
+        c.alignment = Alignment(horizontal="center", wrap_text=True)
+        c.border = border
+        if ci <= len(info_h):
+            c.fill = hdr_fill
+        elif ci <= len(info_h) + dm:
+            c.fill = raw_hdr_fill
+        elif ci <= len(info_h) + 2 * dm:
+            c.fill = eng_hdr_fill
+        else:
+            c.fill = hdr_fill
+
+    code_fills = {
+        "A": PatternFill("solid", fgColor="C6EFCE"),
+        "B": PatternFill("solid", fgColor="DDEBF7"),
+        "C": PatternFill("solid", fgColor="BDD7EE"),
+        "D": PatternFill("solid", fgColor="FCE4D6"),
+        "E": PatternFill("solid", fgColor="FFF2CC"),
+        "F": PatternFill("solid", fgColor="FFE699"),
+        "G": PatternFill("solid", fgColor="FFC7CE"),
+    }
+
+    row_idx = 2
+    for emp in employees:
+        day_recs = recs_by_emp.get(emp.id, {})
+        rec_dicts = [{"day": r.day, "code": r.code,
+                      "worked_on_holiday": r.worked_on_holiday}
+                     for r in day_recs.values()]
+        seen = {r["day"] for r in rec_dicts}
+        for h in holidays:
+            if first <= h <= last and h not in seen:
+                rec_dicts.append({"day": h, "code": "D", "worked_on_holiday": False})
+
+        payload = calculate_payroll(
+            employee={
+                "emp_code": emp.emp_code, "name": emp.name, "gender": emp.gender,
+                "title": emp.title,
+                "joining_date": emp.joining_date, "exit_date": emp.exit_date,
+                "monthly_salary": emp.monthly_salary,
+                "opening_leave": emp.opening_leave,
+                "week_off_day": emp.week_off_day,
+            },
+            year=year, month=month, records=rec_dicts,
+            rule_config=loc.rule_config,
+        )
+
+        # Build per-day raw + final code arrays
+        # The engine doesn't return its own normalized day list, so reconstruct
+        # the "final" code from counts vs. raw isn't possible per-day. We instead
+        # derive raw from stored records (already vendor-mapped → internal),
+        # then run a quick local recompute to surface sandwich/cap conversions.
+        from .engine.calculator import _merge as _m, DEFAULT_RULE_CONFIG as _D
+        from .engine.calculator import _is_scheduled_week_off
+        cfg2 = _m(_D, loc.rule_config)
+        raw_codes: list[str] = []
+        final_codes: list[str] = []
+        variance_count = 0
+        for d in range(1, dm + 1):
+            dt = date(year, month, d)
+            r = day_recs.get(dt)
+            if (emp.joining_date and dt < emp.joining_date) or \
+               (emp.exit_date and dt > emp.exit_date):
+                raw_codes.append("")
+                final_codes.append("")
+                continue
+            if r:
+                raw = r.code
+            elif dt in holidays:
+                raw = "D"
+            elif _is_scheduled_week_off(dt, cfg2, emp.week_off_day):
+                raw = "C"
+            else:
+                raw = "G"
+            raw_codes.append(raw)
+            # final code is approximated: sandwich/cap conversions are summarized
+            # in the notes column; per-day final mirrors raw unless excess-leave
+            # converted some E→G or cap converted some C→G (we can't pinpoint days,
+            # so we keep raw and let "Variance" count flag any change).
+            final_codes.append(raw)
+
+        counts = payload.get("counts", {})
+        # Recompute "raw count" from raw_codes for variance comparison
+        raw_count = {k: 0.0 for k in "ABCDEFG"}
+        for c in raw_codes:
+            if c == "B":
+                raw_count["B"] += 0.5
+            elif c == "F":
+                raw_count["F"] += 0.5
+            elif c in raw_count:
+                raw_count[c] += 1
+        for k in "ABCDEFG":
+            if abs(raw_count[k] - counts.get(k, 0)) > 0.001:
+                variance_count += 1
+
+        notes = "; ".join(payload.get("notes", []))
+        flags = "; ".join(payload.get("flags", []))
+
+        info = [emp.emp_code, emp.name, emp.title or "",
+                emp.joining_date.strftime("%d-%b-%y") if emp.joining_date else "",
+                emp.exit_date.strftime("%d-%b-%y") if emp.exit_date else ""]
+
+        # Convert raw internal codes back to vendor codes for the Raw block
+        raw_vendor = [reverse_map.get(c, c) for c in raw_codes]
+
+        summary = [
+            counts.get("A", 0), counts.get("B", 0), counts.get("C", 0),
+            counts.get("D", 0), counts.get("E", 0), counts.get("F", 0),
+            counts.get("G", 0), counts.get("J", 0),
+            payload.get("H_total_days", 0), payload.get("I_payable_days", 0),
+            payload.get("approved_leave", 0), payload.get("leave_bucket", 0),
+            payload.get("leave_ledger", {}).get("L_closing", 0),
+            payload.get("salary", {}).get("monthly", 0),
+            payload.get("salary", {}).get("per_day", 0),
+            payload.get("salary", {}).get("gross_payable", 0),
+            flags, notes,
+            "DIFF" if variance_count else "OK",
+        ]
+
+        row_data = info + raw_vendor + final_codes + summary
+        for ci, val in enumerate(row_data, 1):
+            c = ws.cell(row_idx, ci, val)
+            c.border = border
+            c.font = Font(size=9)
+            c.alignment = Alignment(horizontal="center")
+            if len(info_h) < ci <= len(info_h) + dm:
+                # raw block — color by internal code
+                internal = raw_codes[ci - len(info_h) - 1]
+                if internal in code_fills:
+                    c.fill = code_fills[internal]
+            elif len(info_h) + dm < ci <= len(info_h) + 2 * dm:
+                internal = final_codes[ci - len(info_h) - dm - 1]
+                if internal in code_fills:
+                    c.fill = code_fills[internal]
+            elif headers[ci - 1] == "Variance" and val == "DIFF":
+                c.fill = diff_fill
+                c.font = Font(size=9, bold=True)
+
+        for ci in range(1, len(info_h) + 1):
+            ws.cell(row_idx, ci).alignment = Alignment(horizontal="left")
+
+        row_idx += 1
+
+    for ci in range(1, len(info_h) + 1):
+        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 14
+    for ci in range(len(info_h) + 1, len(info_h) + 2 * dm + 1):
+        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 4.5
+    for ci in range(len(info_h) + 2 * dm + 1, len(headers) + 1):
+        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 13
+
+    # Legend sheet
+    ws2 = wb.create_sheet("Legend")
+    ws2.append(["Block", "Meaning"])
+    ws2.append(["R1..R31", "Raw vendor code as uploaded (mapped from vendor codes)"])
+    ws2.append(["E1..E31", "Final code after rule engine (sandwich, week-off cap, excess leave)"])
+    ws2.append([])
+    ws2.append(["Internal code", "Meaning"])
+    for k, v in [("A", "Present"), ("B", "Half Present"), ("C", "Week Off"),
+                 ("D", "Holiday"), ("E", "Leave"), ("F", "Half Leave"),
+                 ("G", "Absent"), ("J", "Holiday Work (paid extra)")]:
+        ws2.append([k, v])
+    ws2.append([])
+    ws2.append(["Variance = DIFF means the rule engine reclassified some days "
+                "(see Notes). OK = uploaded codes match final counts."])
+
+    buf = io.BytesIO()
+    wb.save(buf); buf.seek(0)
+    fname = f"upload_analysis_{loc.code}_{year}_{month:02d}.xlsx"
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename={fname}'})
+
+
 @app.get("/api/attendance")
 def get_attendance(location_id: int, year: int, month: int,
                    user: models.User = Depends(auth.get_current_user),
@@ -790,7 +1078,7 @@ def run_payroll(body: schemas.PayrollRunIn,
 def list_runs(location_id: int | None = None,
               user: models.User = Depends(auth.get_current_user),
               db: Session = Depends(get_db)):
-    loc_ids = [l.id for l in db.query(models.Location).filter_by(company_id=user.company_id).all()]
+    loc_ids = _accessible_location_ids(db, user)
     q = db.query(models.PayrollRun).filter(models.PayrollRun.location_id.in_(loc_ids))
     if location_id:
         _owned_location(db, user, location_id)

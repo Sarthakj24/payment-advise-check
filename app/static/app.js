@@ -500,16 +500,66 @@ async function loadTracker() {
 $("#trk-load").onclick = loadTracker;
 
 // ---------- Users (admin only) ----------
+let _allLocations = [];
 async function loadUsers() {
   try {
     const list = await api("/api/users");
+    _allLocations = await api("/api/locations");
+    const locMap = Object.fromEntries(_allLocations.map(l => [l.id, `${l.name} (${l.code})`]));
+
+    const userLocs = {};
+    for (const u of list) {
+      try {
+        const data = await api(`/api/users/${u.id}/locations`);
+        userLocs[u.id] = data.location_ids || [];
+      } catch { userLocs[u.id] = []; }
+    }
+
     $("#usr-table").innerHTML = [
-      "<tr><th>Email</th><th>Role</th><th></th></tr>",
-      ...list.map(u => `<tr><td>${u.email}</td><td>${u.role}</td>
-        <td><button class="danger" onclick='delUser(${u.id})'>Delete</button></td></tr>`)
+      "<tr><th>Email</th><th>Role</th><th>Assigned Locations</th><th></th></tr>",
+      ...list.map(u => {
+        const isAdmin = (u.role || "").toLowerCase() === "admin";
+        const locNames = isAdmin
+          ? "<em>All (admin)</em>"
+          : (userLocs[u.id] || []).map(id => locMap[id] || `#${id}`).join(", ") || "<em>None</em>";
+        return `<tr>
+          <td>${u.email}</td><td>${u.role}</td>
+          <td>${locNames}</td>
+          <td>
+            ${isAdmin ? "" : `<button class="secondary" onclick='manageUserLocs(${u.id}, "${u.email}")'>Locations</button>`}
+            <button class="danger" onclick='delUser(${u.id})'>Delete</button>
+          </td>
+        </tr>`;
+      })
     ].join("");
   } catch (e) { /* non-admin — ignore */ }
 }
+
+let _editingUserLocUid = null;
+window.manageUserLocs = async (uid, email) => {
+  _editingUserLocUid = uid;
+  $("#usr-loc-title").textContent = `Assign Locations — ${email}`;
+  const data = await api(`/api/users/${uid}/locations`);
+  const assigned = new Set(data.location_ids || []);
+  const locs = _allLocations.length ? _allLocations : await api("/api/locations");
+  $("#usr-loc-checks").innerHTML = locs.map(l =>
+    `<label style="display:block;margin:4px 0">
+      <input type="checkbox" value="${l.id}" ${assigned.has(l.id) ? "checked" : ""}>
+      ${l.name} (${l.code})
+    </label>`
+  ).join("");
+  $("#usr-loc-modal").style.display = "";
+};
+$("#usr-loc-cancel").onclick = () => { $("#usr-loc-modal").style.display = "none"; };
+$("#usr-loc-save").onclick = async () => {
+  const ids = [...$$("#usr-loc-checks input:checked")].map(el => +el.value);
+  await api(`/api/users/${_editingUserLocUid}/locations`, {
+    method: "PUT", body: JSON.stringify({ location_ids: ids })
+  });
+  $("#usr-loc-modal").style.display = "none";
+  loadUsers();
+};
+
 window.delUser = async id => {
   if (!confirm("Delete user?")) return;
   await api(`/api/users/${id}`, { method: "DELETE" });
@@ -563,6 +613,7 @@ async function runPayroll() {
 }
 
 // ---------- Vendor upload (wide format) ----------
+let _lastUploadParams = null;
 async function uploadAttendance() {
   const file = $("#up-file").files[0];
   if (!file) { alert("Pick a file"); return; }
@@ -576,6 +627,9 @@ async function uploadAttendance() {
     let msg = `Rows processed: ${data.rows_processed}\nEmployees created: ${data.employees_created}\nAttendance saved: ${data.attendance_saved}`;
     if (data.skipped && data.skipped.length) msg += "\n\nSkipped:\n" + data.skipped.join("\n");
     $("#up-result").textContent = msg;
+    _lastUploadParams = { location_id: $("#up-location").value, year: $("#up-year").value, month: $("#up-month").value };
+    $("#up-analysis").disabled = false;
+    $("#up-analysis-hint").style.display = "";
     refreshAll();
   } catch (e) { $("#up-result").textContent = "Error: " + e.message; }
 }
@@ -601,6 +655,11 @@ $("#up-tmpl-xlsx").onclick = () => {
 $("#dl-csv").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=csv`; };
 $("#dl-xlsx").onclick = () => { if(lastRunId) location.href = `/api/payroll/report?run_id=${lastRunId}&format=xlsx`; };
 $("#dl-checked").onclick = () => { if(lastRunId) location.href = `/api/payroll/checked-report?run_id=${lastRunId}`; };
+$("#up-analysis").onclick = () => {
+  const p = _lastUploadParams;
+  if (!p) return alert("Upload attendance first");
+  location.href = `/api/attendance/upload-analysis?location_id=${p.location_id}&year=${p.year}&month=${p.month}`;
+};
 $("#cfg-location").onchange = loadConfig;
 $("#emp-location").onchange = loadEmployees;
 $("#hol-location").onchange = loadHolidays;
