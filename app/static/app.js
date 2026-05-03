@@ -151,21 +151,15 @@ const RULE_SCHEMA = [
     hint: "Flag employees with a streak of N or more leave days. 0 disables.",
     type: "number", step: 1, min: 0 },
 
-  { section: "Vendor Upload Code Mapping" },
-  { key: "vendor_code_map.P",  label: "Vendor 'P' means",  hint: "What does P in the vendor sheet mean?",  type: "select",
-    options: [["A","Present"],["B","Half Present"],["C","Week Off"],["D","Holiday"],["E","Leave"],["F","Half Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.HD", label: "Vendor 'HD' means", hint: "What does HD in the vendor sheet mean?", type: "select",
-    options: [["B","Half Present"],["A","Present"],["C","Week Off"],["D","Holiday"],["E","Leave"],["F","Half Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.WO", label: "Vendor 'WO' means", hint: "What does WO in the vendor sheet mean?", type: "select",
-    options: [["C","Week Off"],["A","Present"],["B","Half Present"],["D","Holiday"],["E","Leave"],["F","Half Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.H",  label: "Vendor 'H' means",  hint: "What does H in the vendor sheet mean?",  type: "select",
-    options: [["D","Holiday"],["A","Present"],["B","Half Present"],["C","Week Off"],["E","Leave"],["F","Half Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.L",  label: "Vendor 'L' means",  hint: "What does L in the vendor sheet mean?",  type: "select",
-    options: [["E","Leave"],["A","Present"],["B","Half Present"],["C","Week Off"],["D","Holiday"],["F","Half Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.HL", label: "Vendor 'HL' means", hint: "What does HL in the vendor sheet mean?", type: "select",
-    options: [["F","Half Leave"],["A","Present"],["B","Half Present"],["C","Week Off"],["D","Holiday"],["E","Leave"],["G","Absent"]] },
-  { key: "vendor_code_map.A",  label: "Vendor 'A' means",  hint: "What does A in the vendor sheet mean?",  type: "select",
-    options: [["G","Absent"],["A","Present"],["B","Half Present"],["C","Week Off"],["D","Holiday"],["E","Leave"],["F","Half Leave"]] },
+  { section: "Vendor Upload Code Mapping",
+    hint: "Define what code this vendor uses in their sheet for each attendance type. Example: if the vendor marks Present as 'D', type D next to Present." },
+  { key: "_vcm.A", internal: "A", label: "Present",      hint: "Default: P",  type: "vcm", placeholder: "P" },
+  { key: "_vcm.B", internal: "B", label: "Half Present",  hint: "Default: HD", type: "vcm", placeholder: "HD" },
+  { key: "_vcm.C", internal: "C", label: "Week Off",      hint: "Default: WO", type: "vcm", placeholder: "WO" },
+  { key: "_vcm.D", internal: "D", label: "Holiday",       hint: "Default: H",  type: "vcm", placeholder: "H" },
+  { key: "_vcm.E", internal: "E", label: "Leave",         hint: "Default: L",  type: "vcm", placeholder: "L" },
+  { key: "_vcm.F", internal: "F", label: "Half Leave",    hint: "Default: HL", type: "vcm", placeholder: "HL" },
+  { key: "_vcm.G", internal: "G", label: "Absent",        hint: "Default: A",  type: "vcm", placeholder: "A" },
 
   { section: "Custom Checks" },
   { key: "checks", label: "Validation formulas",
@@ -185,10 +179,16 @@ function _set(obj, path, val) {
 
 function renderRuleForm(container, cfg) {
   container.innerHTML = "";
+  // Build reverse vendor map for vcm fields: internal_code → vendor_code
+  const vcMap = cfg.vendor_code_map || {};
+  const reverseVcm = {};
+  for (const [vc, ic] of Object.entries(vcMap)) reverseVcm[ic] = vc;
+
   for (const item of RULE_SCHEMA) {
     if (item.section) {
       const h = document.createElement("div");
       h.className = "cfg-hdr"; h.textContent = item.section;
+      if (item.hint) { const s = document.createElement("small"); s.textContent = item.hint; h.appendChild(s); }
       container.appendChild(h);
       continue;
     }
@@ -197,9 +197,13 @@ function renderRuleForm(container, cfg) {
     l.innerHTML = `<b>${item.label}</b>${item.hint ? `<small>${item.hint}</small>` : ""}`;
     const v = document.createElement("div"); v.className = "cfg-value";
 
-    const cur = _get(cfg, item.key);
+    const cur = item.type === "vcm" ? (reverseVcm[item.internal] || "") : _get(cfg, item.key);
     let input;
-    if (item.type === "select") {
+    if (item.type === "vcm") {
+      input = document.createElement("input");
+      input.type = "text"; input.value = cur; input.placeholder = item.placeholder || "";
+      input.style.textTransform = "uppercase"; input.style.width = "80px";
+    } else if (item.type === "select") {
       input = document.createElement("select");
       for (const [val, lab] of item.options) {
         const o = document.createElement("option");
@@ -228,6 +232,7 @@ function renderRuleForm(container, cfg) {
       input.type = "text"; input.value = cur ?? "";
     }
     input.dataset.key = item.key; input.dataset.type = item.type;
+    if (item.internal) input.dataset.internal = item.internal;
     v.appendChild(input);
     row.appendChild(l); row.appendChild(v);
     container.appendChild(row);
@@ -236,14 +241,20 @@ function renderRuleForm(container, cfg) {
 
 function readRuleForm(container) {
   const cfg = {};
+  const vcmEntries = [];
   container.querySelectorAll("[data-key]").forEach(el => {
     const k = el.dataset.key, t = el.dataset.type;
+    if (t === "vcm") {
+      const vendorCode = el.value.trim().toUpperCase();
+      const internalCode = el.dataset.internal;
+      if (vendorCode) vcmEntries.push([vendorCode, internalCode]);
+      return;
+    }
     let val;
     if (t === "bool") val = el.checked;
     else if (t === "number") val = parseFloat(el.value);
     else if (t === "select") {
       val = el.value;
-      // coerce numeric selects (week_off_day)
       if (!isNaN(+val) && val !== "") val = +val;
     } else if (t === "csv_int") {
       val = el.value.split(",").map(s => s.trim()).filter(Boolean).map(Number).filter(n => !isNaN(n));
@@ -254,6 +265,9 @@ function readRuleForm(container) {
     }
     _set(cfg, k, val);
   });
+  if (vcmEntries.length) {
+    cfg.vendor_code_map = Object.fromEntries(vcmEntries);
+  }
   return cfg;
 }
 
