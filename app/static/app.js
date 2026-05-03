@@ -74,9 +74,23 @@ async function loadLocations() {
   return locs;
 }
 
+let _defaultConfig = {};
 async function loadDefault() {
-  const d = await api("/api/default-config");
-  $("#cfg-default").textContent = JSON.stringify(d, null, 2);
+  _defaultConfig = await api("/api/default-config");
+  $("#cfg-default").textContent = JSON.stringify(_defaultConfig, null, 2);
+}
+
+function _mergeConfig(base, override) {
+  const out = {...base};
+  if (!override) return out;
+  for (const [k, v] of Object.entries(override)) {
+    if (v && typeof v === "object" && !Array.isArray(v) && typeof out[k] === "object" && !Array.isArray(out[k])) {
+      out[k] = {...out[k], ...v};
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
 }
 
 // ---------- Rule config form schema ----------
@@ -138,13 +152,13 @@ const RULE_SCHEMA = [
     type: "number", step: 1, min: 0 },
 
   { section: "Vendor Upload Code Mapping" },
-  { key: "vendor_code_map.P",  label: "Vendor 'P' maps to",  hint: "Typically A (Present).",           type: "text" },
-  { key: "vendor_code_map.HD", label: "Vendor 'HD' maps to", hint: "Typically B (Half-day Present).",  type: "text" },
-  { key: "vendor_code_map.WO", label: "Vendor 'WO' maps to", hint: "Typically C (Week Off).",          type: "text" },
-  { key: "vendor_code_map.H",  label: "Vendor 'H' maps to",  hint: "Typically D (Holiday).",           type: "text" },
-  { key: "vendor_code_map.L",  label: "Vendor 'L' maps to",  hint: "Typically E (Leave Full Day).",    type: "text" },
-  { key: "vendor_code_map.HL", label: "Vendor 'HL' maps to", hint: "Typically F (Half Leave).",        type: "text" },
-  { key: "vendor_code_map.A",  label: "Vendor 'A' maps to",  hint: "Typically G (Absent).",            type: "text" },
+  { key: "vendor_code_map.P",  label: "Vendor 'P' → internal code",  hint: "Enter A (Present). Must be one of A/B/C/D/E/F/G.",           type: "text" },
+  { key: "vendor_code_map.HD", label: "Vendor 'HD' → internal code", hint: "Enter B (Half-day Present). Must be one of A/B/C/D/E/F/G.",  type: "text" },
+  { key: "vendor_code_map.WO", label: "Vendor 'WO' → internal code", hint: "Enter C (Week Off). Must be one of A/B/C/D/E/F/G.",          type: "text" },
+  { key: "vendor_code_map.H",  label: "Vendor 'H' → internal code",  hint: "Enter D (Holiday). Must be one of A/B/C/D/E/F/G.",           type: "text" },
+  { key: "vendor_code_map.L",  label: "Vendor 'L' → internal code",  hint: "Enter E (Leave Full Day). Must be one of A/B/C/D/E/F/G.",    type: "text" },
+  { key: "vendor_code_map.HL", label: "Vendor 'HL' → internal code", hint: "Enter F (Half Leave). Must be one of A/B/C/D/E/F/G.",        type: "text" },
+  { key: "vendor_code_map.A",  label: "Vendor 'A' → internal code",  hint: "Enter G (Absent). Must be one of A/B/C/D/E/F/G.",            type: "text" },
 
   { section: "Custom Checks" },
   { key: "checks", label: "Validation formulas",
@@ -240,7 +254,8 @@ function readRuleForm(container) {
 async function loadConfig() {
   const id = $("#cfg-location").value; if (!id) return;
   const loc = await api(`/api/locations/${id}`);
-  renderRuleForm($("#cfg-form"), loc.rule_config || {});
+  const merged = _mergeConfig(_defaultConfig, loc.rule_config);
+  renderRuleForm($("#cfg-form"), merged);
   $("#cfg-json").value = JSON.stringify(loc.rule_config, null, 2);
 }
 async function saveConfig() {
@@ -345,7 +360,7 @@ function locForm(l) {
   f.querySelector("[name=id]").value = l.id || "";
   f.querySelector("[name=code]").value = l.code || "";
   f.querySelector("[name=name]").value = l.name || "";
-  renderRuleForm($("#loc-cfg-form"), l.rule_config || {});
+  renderRuleForm($("#loc-cfg-form"), _mergeConfig(_defaultConfig, l.rule_config));
 }
 window.editLoc = l => locForm(l);
 window.delLoc = async id => {
