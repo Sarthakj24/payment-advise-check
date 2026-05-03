@@ -654,17 +654,15 @@ async def upload_attendance_wide(
 def upload_analysis(location_id: int, year: int, month: int,
                     user: models.User = Depends(auth.get_current_user),
                     db: Session = Depends(get_db)):
-    """Variance/check sheet for the most recent upload of (location, year, month).
-
-    Compares stored attendance (already mapped to internal codes) against what the
-    rule engine produces for that month — showing per-day vendor codes, per-day
-    final codes, the count summary, payable days, gross, plus any flags/notes
-    (sandwich rule, excess leaves → absent, week-off cap, etc.).
+    """Two-sheet analysis report:
+    Sheet 1 — Original Upload: raw attendance as uploaded, raw counts, raw gross.
+    Sheet 2 — After Rules: engine-adjusted codes, adjusted counts, adjusted gross,
+              gross difference, and reason for every change.
     """
     from calendar import monthrange
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
-    from .engine.calculator import _merge, DEFAULT_RULE_CONFIG
+    from .engine.calculator import _merge, _is_scheduled_week_off, DEFAULT_RULE_CONFIG
 
     loc = _owned_location(db, user, location_id)
     cfg = _merge(DEFAULT_RULE_CONFIG, loc.rule_config)
@@ -687,42 +685,14 @@ def upload_analysis(location_id: int, year: int, month: int,
     for r in recs_all:
         recs_by_emp.setdefault(r.employee_id, {})[r.day] = r
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Upload Analysis"
-
-    info_h = ["Emp Code", "Name", "Designation", "Joining", "Exit"]
-    raw_h = [f"R{d}" for d in range(1, dm + 1)]   # raw vendor code as uploaded
-    eng_h = [f"E{d}" for d in range(1, dm + 1)]   # final engine code (post-rules)
-    sum_h = ["Present", "Half Present", "Week Off", "Holiday",
-             "Leave", "Half Leave", "Absent", "Holiday Work",
-             "Total Days", "Payable Days",
-             "Approved Leave", "Leave Bucket", "Closing Leave",
-             "Monthly Salary", "Per Day", "Gross Payable",
-             "Flags", "Notes", "Variance"]
-    headers = info_h + raw_h + eng_h + sum_h
-
+    # ---- Styles ----
+    thin = Side(style="thin", color="B0B0B0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
     hdr_fill = PatternFill("solid", fgColor="D9E1F2")
     raw_hdr_fill = PatternFill("solid", fgColor="FFE699")
     eng_hdr_fill = PatternFill("solid", fgColor="C6E0B4")
     diff_fill = PatternFill("solid", fgColor="F4B084")
-    thin = Side(style="thin", color="B0B0B0")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-
-    for ci, h in enumerate(headers, 1):
-        c = ws.cell(1, ci, h)
-        c.font = Font(bold=True, size=9)
-        c.alignment = Alignment(horizontal="center", wrap_text=True)
-        c.border = border
-        if ci <= len(info_h):
-            c.fill = hdr_fill
-        elif ci <= len(info_h) + dm:
-            c.fill = raw_hdr_fill
-        elif ci <= len(info_h) + 2 * dm:
-            c.fill = eng_hdr_fill
-        else:
-            c.fill = hdr_fill
-
+    ok_fill = PatternFill("solid", fgColor="C6EFCE")
     code_fills = {
         "A": PatternFill("solid", fgColor="C6EFCE"),
         "B": PatternFill("solid", fgColor="DDEBF7"),
@@ -733,7 +703,10 @@ def upload_analysis(location_id: int, year: int, month: int,
         "G": PatternFill("solid", fgColor="FFC7CE"),
     }
 
-    row_idx = 2
+    wb = Workbook()
+
+    # ---- Compute per-employee data ----
+    emp_data = []
     for emp in employees:
         day_recs = recs_by_emp.get(emp.id, {})
         rec_dicts = [{"day": r.day, "code": r.code,
@@ -744,136 +717,243 @@ def upload_analysis(location_id: int, year: int, month: int,
             if first <= h <= last and h not in seen:
                 rec_dicts.append({"day": h, "code": "D", "worked_on_holiday": False})
 
-        payload = calculate_payroll(
-            employee={
-                "emp_code": emp.emp_code, "name": emp.name, "gender": emp.gender,
-                "title": emp.title,
-                "joining_date": emp.joining_date, "exit_date": emp.exit_date,
-                "monthly_salary": emp.monthly_salary,
-                "opening_leave": emp.opening_leave,
-                "week_off_day": emp.week_off_day,
-            },
-            year=year, month=month, records=rec_dicts,
-            rule_config=loc.rule_config,
+        emp_dict = {
+            "emp_code": emp.emp_code, "name": emp.name, "gender": emp.gender,
+            "title": emp.title,
+            "joining_date": emp.joining_date, "exit_date": emp.exit_date,
+            "monthly_salary": emp.monthly_salary,
+            "opening_leave": emp.opening_leave,
+            "week_off_day": emp.week_off_day,
+        }
+
+        # Run engine TWICE:
+        # 1) "raw" — same payable formula but rules disabled (no sandwich,
+        #    no excess-leave conversion, no week-off cap, no exit trailing)
+        no_rules_cfg = dict(loc.rule_config or {})
+        no_rules_cfg.update({
+            "sandwich_rule": False,
+            "excess_leave_to_absent": False,
+            "week_off_cap_percent": 0,
+            "exit_trailing_absence_unpaid": False,
+        })
+        raw_payload = calculate_payroll(
+            employee=emp_dict, year=year, month=month,
+            records=rec_dicts, rule_config=no_rules_cfg,
+        )
+        # 2) "engine" — full rules enabled
+        eng_payload = calculate_payroll(
+            employee=emp_dict, year=year, month=month,
+            records=rec_dicts, rule_config=loc.rule_config,
         )
 
-        # Build per-day raw + final code arrays
-        # The engine doesn't return its own normalized day list, so reconstruct
-        # the "final" code from counts vs. raw isn't possible per-day. We instead
-        # derive raw from stored records (already vendor-mapped → internal),
-        # then run a quick local recompute to surface sandwich/cap conversions.
-        from .engine.calculator import _merge as _m, DEFAULT_RULE_CONFIG as _D
-        from .engine.calculator import _is_scheduled_week_off
-        cfg2 = _m(_D, loc.rule_config)
         raw_codes: list[str] = []
-        final_codes: list[str] = []
-        variance_count = 0
         for d in range(1, dm + 1):
             dt = date(year, month, d)
-            r = day_recs.get(dt)
             if (emp.joining_date and dt < emp.joining_date) or \
                (emp.exit_date and dt > emp.exit_date):
                 raw_codes.append("")
-                final_codes.append("")
                 continue
+            r = day_recs.get(dt)
             if r:
-                raw = r.code
+                raw_codes.append(r.code)
             elif dt in holidays:
-                raw = "D"
-            elif _is_scheduled_week_off(dt, cfg2, emp.week_off_day):
-                raw = "C"
+                raw_codes.append("D")
+            elif _is_scheduled_week_off(dt, cfg, emp.week_off_day):
+                raw_codes.append("C")
             else:
-                raw = "G"
-            raw_codes.append(raw)
-            # final code is approximated: sandwich/cap conversions are summarized
-            # in the notes column; per-day final mirrors raw unless excess-leave
-            # converted some E→G or cap converted some C→G (we can't pinpoint days,
-            # so we keep raw and let "Variance" count flag any change).
-            final_codes.append(raw)
+                raw_codes.append("G")
 
-        counts = payload.get("counts", {})
-        # Recompute "raw count" from raw_codes for variance comparison
-        raw_count = {k: 0.0 for k in "ABCDEFG"}
-        for c in raw_codes:
-            if c == "B":
-                raw_count["B"] += 0.5
-            elif c == "F":
-                raw_count["F"] += 0.5
-            elif c in raw_count:
-                raw_count[c] += 1
-        for k in "ABCDEFG":
-            if abs(raw_count[k] - counts.get(k, 0)) > 0.001:
-                variance_count += 1
+        raw_counts = raw_payload.get("counts", {})
+        raw_payable = raw_payload.get("I_payable_days", 0)
+        raw_total = raw_payload.get("H_total_days", 0)
+        raw_gross = raw_payload.get("salary", {}).get("gross_payable", 0)
 
-        notes = "; ".join(payload.get("notes", []))
-        flags = "; ".join(payload.get("flags", []))
+        eng_counts = eng_payload.get("counts", {})
+        eng_payable = eng_payload.get("I_payable_days", 0)
+        eng_total = eng_payload.get("H_total_days", 0)
+        eng_gross = eng_payload.get("salary", {}).get("gross_payable", 0)
 
-        info = [emp.emp_code, emp.name, emp.title or "",
+        gross_diff = round(eng_gross - raw_gross, 2)
+
+        reasons = []
+        for note in eng_payload.get("notes", []):
+            reasons.append(note)
+        for flag in eng_payload.get("flags", []):
+            reasons.append(f"Flag: {flag}")
+        for code_name, label in [("E", "Leave"), ("G", "Absent"), ("C", "Week Off")]:
+            raw_v = raw_counts.get(code_name, 0)
+            eng_v = eng_counts.get(code_name, 0)
+            delta = eng_v - raw_v
+            if abs(delta) > 0.001:
+                reasons.append(f"{label}: {raw_v} → {eng_v} ({'+' if delta > 0 else ''}{delta})")
+
+        emp_data.append({
+            "emp": emp,
+            "raw_codes": raw_codes,
+            "raw_counts": raw_counts,
+            "raw_payable": raw_payable,
+            "raw_total": raw_total,
+            "raw_gross": raw_gross,
+            "eng_counts": eng_counts,
+            "eng_payable": eng_payable,
+            "eng_total": eng_total,
+            "eng_gross": eng_gross,
+            "gross_diff": gross_diff,
+            "reasons": reasons,
+            "raw_payload": raw_payload,
+            "eng_payload": eng_payload,
+        })
+
+    # ================================================================
+    # SHEET 1: Original Upload
+    # ================================================================
+    ws1 = wb.active
+    ws1.title = "Original Upload"
+
+    info_h = ["Emp Code", "Name", "Designation", "Gender", "Joining", "Exit"]
+    day_h = [str(d) for d in range(1, dm + 1)]
+    sum1_h = ["Present(A)", "Half(B)", "WeekOff(C)", "Holiday(D)",
+              "Leave(E)", "HalfLeave(F)", "Absent(G)",
+              "Total Days", "Payable Days", "Monthly Salary", "Per Day", "Gross Pay (Original)"]
+    headers1 = info_h + day_h + sum1_h
+
+    for ci, h in enumerate(headers1, 1):
+        c = ws1.cell(1, ci, h)
+        c.font = Font(bold=True, size=9)
+        c.alignment = Alignment(horizontal="center", wrap_text=True)
+        c.border = border
+        if ci <= len(info_h):
+            c.fill = hdr_fill
+        elif ci <= len(info_h) + dm:
+            c.fill = raw_hdr_fill
+        else:
+            c.fill = hdr_fill
+
+    for ri, ed in enumerate(emp_data, 2):
+        emp = ed["emp"]
+        info = [emp.emp_code, emp.name, emp.title or "", emp.gender,
                 emp.joining_date.strftime("%d-%b-%y") if emp.joining_date else "",
                 emp.exit_date.strftime("%d-%b-%y") if emp.exit_date else ""]
-
-        # Convert raw internal codes back to vendor codes for the Raw block
-        raw_vendor = [reverse_map.get(c, c) for c in raw_codes]
-
-        summary = [
-            counts.get("A", 0), counts.get("B", 0), counts.get("C", 0),
-            counts.get("D", 0), counts.get("E", 0), counts.get("F", 0),
-            counts.get("G", 0), counts.get("J", 0),
-            payload.get("H_total_days", 0), payload.get("I_payable_days", 0),
-            payload.get("approved_leave", 0), payload.get("leave_bucket", 0),
-            payload.get("leave_ledger", {}).get("L_closing", 0),
-            payload.get("salary", {}).get("monthly", 0),
-            payload.get("salary", {}).get("per_day", 0),
-            payload.get("salary", {}).get("gross_payable", 0),
-            flags, notes,
-            "DIFF" if variance_count else "OK",
-        ]
-
-        row_data = info + raw_vendor + final_codes + summary
-        for ci, val in enumerate(row_data, 1):
-            c = ws.cell(row_idx, ci, val)
+        vendor_codes = [reverse_map.get(c, c) for c in ed["raw_codes"]]
+        rc = ed["raw_counts"]
+        per_day = emp.monthly_salary / dm if dm else 0
+        summary = [rc.get("A", 0), rc.get("B", 0), rc.get("C", 0),
+                   rc.get("D", 0), rc.get("E", 0), rc.get("F", 0), rc.get("G", 0),
+                   ed["raw_total"], ed["raw_payable"],
+                   emp.monthly_salary, round(per_day, 2), ed["raw_gross"]]
+        row = info + vendor_codes + summary
+        for ci, val in enumerate(row, 1):
+            c = ws1.cell(ri, ci, val)
             c.border = border
             c.font = Font(size=9)
             c.alignment = Alignment(horizontal="center")
             if len(info_h) < ci <= len(info_h) + dm:
-                # raw block — color by internal code
-                internal = raw_codes[ci - len(info_h) - 1]
+                internal = ed["raw_codes"][ci - len(info_h) - 1]
                 if internal in code_fills:
                     c.fill = code_fills[internal]
-            elif len(info_h) + dm < ci <= len(info_h) + 2 * dm:
-                internal = final_codes[ci - len(info_h) - dm - 1]
-                if internal in code_fills:
-                    c.fill = code_fills[internal]
-            elif headers[ci - 1] == "Variance" and val == "DIFF":
-                c.fill = diff_fill
-                c.font = Font(size=9, bold=True)
-
         for ci in range(1, len(info_h) + 1):
-            ws.cell(row_idx, ci).alignment = Alignment(horizontal="left")
-
-        row_idx += 1
+            ws1.cell(ri, ci).alignment = Alignment(horizontal="left")
 
     for ci in range(1, len(info_h) + 1):
-        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 14
-    for ci in range(len(info_h) + 1, len(info_h) + 2 * dm + 1):
-        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 4.5
-    for ci in range(len(info_h) + 2 * dm + 1, len(headers) + 1):
-        ws.column_dimensions[ws.cell(1, ci).column_letter].width = 13
+        ws1.column_dimensions[ws1.cell(1, ci).column_letter].width = 14
+    for ci in range(len(info_h) + 1, len(info_h) + dm + 1):
+        ws1.column_dimensions[ws1.cell(1, ci).column_letter].width = 4.5
+    for ci in range(len(info_h) + dm + 1, len(headers1) + 1):
+        ws1.column_dimensions[ws1.cell(1, ci).column_letter].width = 14
 
-    # Legend sheet
-    ws2 = wb.create_sheet("Legend")
-    ws2.append(["Block", "Meaning"])
-    ws2.append(["R1..R31", "Raw vendor code as uploaded (mapped from vendor codes)"])
-    ws2.append(["E1..E31", "Final code after rule engine (sandwich, week-off cap, excess leave)"])
-    ws2.append([])
-    ws2.append(["Internal code", "Meaning"])
-    for k, v in [("A", "Present"), ("B", "Half Present"), ("C", "Week Off"),
-                 ("D", "Holiday"), ("E", "Leave"), ("F", "Half Leave"),
-                 ("G", "Absent"), ("J", "Holiday Work (paid extra)")]:
-        ws2.append([k, v])
-    ws2.append([])
-    ws2.append(["Variance = DIFF means the rule engine reclassified some days "
-                "(see Notes). OK = uploaded codes match final counts."])
+    # ================================================================
+    # SHEET 2: After Rules (Engine Output)
+    # ================================================================
+    ws2 = wb.create_sheet("After Rules")
+
+    sum2_h = ["Present(A)", "Half(B)", "WeekOff(C)", "Holiday(D)",
+              "Leave(E)", "HalfLeave(F)", "Absent(G)", "Holiday Work(J)",
+              "Total Days", "Payable Days", "Monthly Salary", "Per Day",
+              "Gross Pay (After Rules)",
+              "Gross Pay (Original)", "Gross Difference", "Change Reasons"]
+    headers2 = info_h + day_h + sum2_h
+
+    for ci, h in enumerate(headers2, 1):
+        c = ws2.cell(1, ci, h)
+        c.font = Font(bold=True, size=9)
+        c.alignment = Alignment(horizontal="center", wrap_text=True)
+        c.border = border
+        if ci <= len(info_h):
+            c.fill = hdr_fill
+        elif ci <= len(info_h) + dm:
+            c.fill = eng_hdr_fill
+        else:
+            c.fill = hdr_fill
+
+    for ri, ed in enumerate(emp_data, 2):
+        emp = ed["emp"]
+        info = [emp.emp_code, emp.name, emp.title or "", emp.gender,
+                emp.joining_date.strftime("%d-%b-%y") if emp.joining_date else "",
+                emp.exit_date.strftime("%d-%b-%y") if emp.exit_date else ""]
+        # For engine codes: we show day codes but highlight cells that changed
+        vendor_codes = [reverse_map.get(c, c) for c in ed["raw_codes"]]
+        ec = ed["eng_counts"]
+        per_day = emp.monthly_salary / dm if dm else 0
+        summary = [ec.get("A", 0), ec.get("B", 0), ec.get("C", 0), ec.get("D", 0),
+                   ec.get("E", 0), ec.get("F", 0), ec.get("G", 0), ec.get("J", 0),
+                   ed["eng_total"], ed["eng_payable"],
+                   emp.monthly_salary, round(per_day, 2),
+                   ed["eng_gross"], ed["raw_gross"], ed["gross_diff"],
+                   "; ".join(ed["reasons"]) if ed["reasons"] else "No changes"]
+        row = info + vendor_codes + summary
+        for ci, val in enumerate(row, 1):
+            c = ws2.cell(ri, ci, val)
+            c.border = border
+            c.font = Font(size=9)
+            c.alignment = Alignment(horizontal="center")
+            if len(info_h) < ci <= len(info_h) + dm:
+                internal = ed["raw_codes"][ci - len(info_h) - 1]
+                if internal in code_fills:
+                    c.fill = code_fills[internal]
+            # Highlight gross difference
+            if headers2[ci - 1] == "Gross Difference":
+                if val != 0:
+                    c.fill = diff_fill
+                    c.font = Font(size=9, bold=True)
+                else:
+                    c.fill = ok_fill
+            if headers2[ci - 1] == "Change Reasons" and ed["reasons"]:
+                c.fill = PatternFill("solid", fgColor="FFF2CC")
+                c.alignment = Alignment(horizontal="left", wrap_text=True)
+        for ci in range(1, len(info_h) + 1):
+            ws2.cell(ri, ci).alignment = Alignment(horizontal="left")
+
+    for ci in range(1, len(info_h) + 1):
+        ws2.column_dimensions[ws2.cell(1, ci).column_letter].width = 14
+    for ci in range(len(info_h) + 1, len(info_h) + dm + 1):
+        ws2.column_dimensions[ws2.cell(1, ci).column_letter].width = 4.5
+    for ci in range(len(info_h) + dm + 1, len(headers2) + 1):
+        ws2.column_dimensions[ws2.cell(1, ci).column_letter].width = 16
+    # Make Change Reasons column wider
+    last_col_letter = ws2.cell(1, len(headers2)).column_letter
+    ws2.column_dimensions[last_col_letter].width = 50
+
+    # ================================================================
+    # SHEET 3: Legend
+    # ================================================================
+    ws3 = wb.create_sheet("Legend")
+    ws3.append(["Sheet", "Description"])
+    ws3.append(["Original Upload", "Raw attendance as uploaded — no rule engine adjustments. Gross pay = (monthly_salary / days_in_month) * payable_days."])
+    ws3.append(["After Rules", "Attendance after rule engine (sandwich, excess leave, week-off cap). Shows adjusted gross, original gross, difference, and reasons."])
+    ws3.append([])
+    ws3.append(["Vendor Code", "Internal Code", "Meaning"])
+    for vc, ic in vendor_map.items():
+        meaning = {"A": "Present", "B": "Half Present", "C": "Week Off",
+                   "D": "Holiday", "E": "Leave", "F": "Half Leave", "G": "Absent"}.get(ic, "")
+        ws3.append([vc, ic, meaning])
+    ws3.append([])
+    ws3.append(["Rule", "Description"])
+    ws3.append(["Sandwich Rule", "Week-off/holiday flanked by leaves on both sides counts as leave"])
+    ws3.append(["Excess Leave", "Leaves beyond approved bucket convert to Absent (G)"])
+    ws3.append(["Week-off Cap", "Week-offs exceeding cap % of total days convert to Absent (G)"])
+    ws3.append(["Exit Trailing Absence", "If employee exits but last days are absent, effective exit moves back"])
+    for ci in range(1, 4):
+        ws3.column_dimensions[ws3.cell(1, ci).column_letter].width = 25
 
     buf = io.BytesIO()
     wb.save(buf); buf.seek(0)
