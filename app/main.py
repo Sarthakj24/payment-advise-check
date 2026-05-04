@@ -641,13 +641,71 @@ async def upload_attendance_wide(
             ))
             att_saved += 1
 
+    # Determine version: increment for same (location, year, month)
+    prev = db.query(models.UploadBatch).filter_by(
+        location_id=loc.id, year=year, month=month
+    ).order_by(models.UploadBatch.version.desc()).first()
+    version = (prev.version + 1) if prev else 1
+
+    batch = models.UploadBatch(
+        location_id=loc.id, year=year, month=month, version=version,
+        uploaded_by=user.id, filename=file.filename or "",
+        rows_processed=len(data_rows), employees_created=created,
+        attendance_saved=att_saved,
+    )
+    db.add(batch)
     db.commit()
     return {
         "rows_processed": len(data_rows),
         "employees_created": created,
         "attendance_saved": att_saved,
         "skipped": skipped[:20],
+        "version": version,
+        "batch_id": batch.id,
     }
+
+
+@app.get("/api/upload-history")
+def upload_history(location_id: int,
+                   user: models.User = Depends(auth.get_current_user),
+                   db: Session = Depends(get_db)):
+    _owned_location(db, user, location_id)
+    batches = db.query(models.UploadBatch).filter_by(
+        location_id=location_id
+    ).order_by(
+        models.UploadBatch.year.desc(),
+        models.UploadBatch.month.desc(),
+        models.UploadBatch.version.desc(),
+    ).all()
+
+    MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+                   "July", "August", "September", "October", "November", "December"]
+
+    # Also fetch payroll runs for this location to link them
+    runs = db.query(models.PayrollRun).filter_by(location_id=location_id).all()
+    run_map: dict[tuple, list] = {}
+    for r in runs:
+        run_map.setdefault((r.year, r.month), []).append({
+            "run_id": r.id, "created_at": r.created_at.isoformat(),
+        })
+
+    result = []
+    for b in batches:
+        payroll_runs = run_map.get((b.year, b.month), [])
+        result.append({
+            "id": b.id,
+            "year": b.year,
+            "month": b.month,
+            "month_name": MONTH_NAMES[b.month] if 1 <= b.month <= 12 else str(b.month),
+            "version": b.version,
+            "uploaded_at": b.uploaded_at.isoformat() if b.uploaded_at else None,
+            "filename": b.filename,
+            "rows_processed": b.rows_processed,
+            "employees_created": b.employees_created,
+            "attendance_saved": b.attendance_saved,
+            "payroll_runs": payroll_runs,
+        })
+    return result
 
 
 @app.get("/api/attendance/upload-analysis")
@@ -812,8 +870,8 @@ def upload_analysis(location_id: int, year: int, month: int,
 
     info_h = ["Emp Code", "Name", "Designation", "Gender", "Joining", "Exit"]
     day_h = [str(d) for d in range(1, dm + 1)]
-    sum1_h = ["Present(A)", "Half(B)", "WeekOff(C)", "Holiday(D)",
-              "Leave(E)", "HalfLeave(F)", "Absent(G)",
+    sum1_h = ["Present", "Half Present", "Week Off", "Holiday",
+              "Leave", "Half Leave", "Absent",
               "Total Days", "Payable Days", "Monthly Salary", "Per Day", "Gross Pay (Original)"]
     headers1 = info_h + day_h + sum1_h
 
@@ -866,8 +924,8 @@ def upload_analysis(location_id: int, year: int, month: int,
     # ================================================================
     ws2 = wb.create_sheet("After Rules")
 
-    sum2_h = ["Present(A)", "Half(B)", "WeekOff(C)", "Holiday(D)",
-              "Leave(E)", "HalfLeave(F)", "Absent(G)", "Holiday Work(J)",
+    sum2_h = ["Present", "Half Present", "Week Off", "Holiday",
+              "Leave", "Half Leave", "Absent", "Holiday Work",
               "Total Days", "Payable Days", "Monthly Salary", "Per Day",
               "Gross Pay (After Rules)",
               "Gross Pay (Original)", "Gross Difference", "Change Reasons"]

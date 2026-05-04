@@ -79,6 +79,21 @@ class AttendanceRecord(Base):
     worked_on_holiday = Column(Boolean, default=False)  # flags C/D that were actually worked
 
 
+class UploadBatch(Base):
+    __tablename__ = "upload_batches"
+    id = Column(Integer, primary_key=True)
+    location_id = Column(Integer, ForeignKey("locations.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    filename = Column(String, nullable=True)
+    rows_processed = Column(Integer, default=0)
+    employees_created = Column(Integer, default=0)
+    attendance_saved = Column(Integer, default=0)
+
+
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
     id = Column(Integer, primary_key=True)

@@ -21,6 +21,8 @@ $$(".tab").forEach(t => t.onclick = async () => {
       await loadLocations(); loadHolidays();
     } else if (t.dataset.tab === "employees") {
       await loadLocations(); loadEmployees();
+    } else if (t.dataset.tab === "upload") {
+      await loadLocations(); loadUploadHistory();
     }
   } catch (e) { /* ignore */ }
 });
@@ -663,12 +665,50 @@ async function uploadAttendance() {
     let msg = `Rows processed: ${data.rows_processed}\nEmployees created: ${data.employees_created}\nAttendance saved: ${data.attendance_saved}`;
     if (data.skipped && data.skipped.length) msg += "\n\nSkipped:\n" + data.skipped.join("\n");
     $("#up-result").textContent = msg;
+    if (data.version) msg += `\nVersion: ${data.version}`;
     _lastUploadParams = { location_id: $("#up-location").value, year: $("#up-year").value, month: $("#up-month").value };
     $("#up-analysis").disabled = false;
     $("#up-analysis-hint").style.display = "";
+    loadUploadHistory();
     refreshAll();
   } catch (e) { $("#up-result").textContent = "Error: " + e.message; }
 }
+
+// ---------- Upload history ----------
+async function loadUploadHistory() {
+  const loc = $("#up-location").value;
+  if (!loc) { $("#up-history").innerHTML = ""; return; }
+  try {
+    const list = await api(`/api/upload-history?location_id=${loc}`);
+    if (!list.length) { $("#up-history").innerHTML = "<tr><td>No uploads yet</td></tr>"; return; }
+    const rows = list.map(b => {
+      const payrollLinks = b.payroll_runs.length
+        ? b.payroll_runs.map(r =>
+          `<a href="/api/payroll/report?run_id=${r.run_id}&format=xlsx" title="Download payroll XLSX">Payroll #${r.run_id}</a>`
+        ).join(", ")
+        : "—";
+      const dt = b.uploaded_at ? new Date(b.uploaded_at).toLocaleString() : "";
+      return `<tr>
+        <td>${b.month_name} ${b.year}</td>
+        <td>v${b.version}</td>
+        <td>${dt}</td>
+        <td>${b.filename || ""}</td>
+        <td>${b.rows_processed}</td>
+        <td>${b.attendance_saved}</td>
+        <td>${b.employees_created}</td>
+        <td>${payrollLinks}</td>
+        <td><button class="secondary" onclick="downloadAnalysis(${loc},${b.year},${b.month})">Analysis</button></td>
+      </tr>`;
+    });
+    $("#up-history").innerHTML = `<tr>
+      <th>Month</th><th>Version</th><th>Uploaded</th><th>File</th>
+      <th>Rows</th><th>Attendance</th><th>New Emps</th><th>Payroll Runs</th><th></th>
+    </tr>` + rows.join("");
+  } catch (e) { /* ignore */ }
+}
+window.downloadAnalysis = (locId, year, month) => {
+  location.href = `/api/attendance/upload-analysis?location_id=${locId}&year=${year}&month=${month}`;
+};
 
 // ---------- Wire up ----------
 $("#run-btn").onclick = runPayroll;
@@ -699,6 +739,7 @@ $("#up-analysis").onclick = () => {
 $("#cfg-location").onchange = loadConfig;
 $("#emp-location").onchange = loadEmployees;
 $("#hol-location").onchange = loadHolidays;
+$("#up-location").onchange = loadUploadHistory;
 
 async function refreshAll() {
   await loadLocations();
@@ -709,6 +750,7 @@ async function refreshAll() {
   await loadEmployees();
   await loadHolidays();
   await loadConfig();
+  await loadUploadHistory();
 }
 
 (async () => {

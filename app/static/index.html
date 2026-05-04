@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Attendance Payroll Calculator</title>
-<link rel="stylesheet" href="/static/style.css?v=12">
+<link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body>
 <header>
@@ -34,7 +34,7 @@
   <div class="row">
     <label>Location <select id="run-location"></select></label>
     <label>Year <input id="run-year" type="number" value="2025" /></label>
-    <label>Month <input id="run-month" type="number" value="1" min="1" max="12" /></label>
+    <label>Month <select id="run-month"><option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
     <button id="run-btn">Run</button>
     <button id="dl-csv" disabled>Download CSV</button>
     <button id="dl-xlsx" disabled>Download Excel</button>
@@ -53,7 +53,7 @@
   <div class="row">
     <label>Location <select id="att-location"></select></label>
     <label>Year <input id="att-year" type="number" value="2025"/></label>
-    <label>Month <input id="att-month" type="number" value="1" min="1" max="12"/></label>
+    <label>Month <select id="att-month"><option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
     <button id="att-load">Load</button>
     <button id="att-save">Save</button>
   </div>
@@ -66,7 +66,7 @@
   <div class="row">
     <label>Location <select id="trk-location"></select></label>
     <label>Year <input id="trk-year" type="number" value="2025"/></label>
-    <label>Month <input id="trk-month" type="number" value="1" min="1" max="12"/></label>
+    <label>Month <select id="trk-month"><option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
     <button id="trk-load">Load</button>
   </div>
   <div class="table-wrap"><table id="trk-table"></table></div>
@@ -194,7 +194,7 @@
   <div class="row">
     <label>Location <select id="up-location"></select></label>
     <label>Year <input id="up-year" type="number" value="2025" style="width:90px"/></label>
-    <label>Month <input id="up-month" type="number" value="1" min="1" max="12" style="width:70px"/></label>
+    <label>Month <select id="up-month"><option value="1">January</option><option value="2">February</option><option value="3">March</option><option value="4">April</option><option value="5">May</option><option value="6">June</option><option value="7">July</option><option value="8">August</option><option value="9">September</option><option value="10">October</option><option value="11">November</option><option value="12">December</option></select></label>
     <button id="up-tmpl-csv" class="secondary">Download CSV template</button>
     <button id="up-tmpl-xlsx" class="secondary">Download Excel template</button>
   </div>
@@ -207,8 +207,12 @@
     <button id="up-analysis" class="secondary" disabled>Download Analysis Report</button>
   </div>
   <p class="hint" id="up-analysis-hint" style="display:none">Compares uploaded attendance against the rule engine. Shows per-day raw vs final codes, variance flags, payable days, and gross amounts.</p>
+
+  <h3 style="margin-top:2rem">Upload History</h3>
+  <p class="hint">All uploads for this location, grouped by month. Multiple uploads for the same month show as versions.</p>
+  <div class="table-wrap"><table id="up-history"></table></div>
 </section>
 
-<script src="/static/app.js?v=12"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>
