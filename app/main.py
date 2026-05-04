@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import os
 import secrets
 from datetime import date, datetime
@@ -238,10 +239,29 @@ def update_location(loc_id: int, body: schemas.LocationIn,
                     user: models.User = Depends(auth.require_admin),
                     db: Session = Depends(get_db)):
     loc = _owned_location(db, user, loc_id)
+    old_config = dict(loc.rule_config) if loc.rule_config else {}
+    new_config = body.model_dump().get("rule_config", {})
     for k, v in body.model_dump().items():
         if k == "company_id":
-            continue  # never reassign
+            continue
         setattr(loc, k, v)
+    if json.dumps(old_config, sort_keys=True) != json.dumps(new_config, sort_keys=True):
+        diffs = []
+        all_keys = set(list(old_config.keys()) + list(new_config.keys()))
+        for k in sorted(all_keys):
+            ov = old_config.get(k)
+            nv = new_config.get(k)
+            if ov != nv:
+                diffs.append(f"{k}: {ov} → {nv}")
+        prev = db.query(models.RuleConfigHistory).filter_by(
+            location_id=loc.id
+        ).order_by(models.RuleConfigHistory.version.desc()).first()
+        ver = (prev.version + 1) if prev else 1
+        db.add(models.RuleConfigHistory(
+            location_id=loc.id, version=ver, changed_by=user.id,
+            config_snapshot=new_config,
+            diff_summary="; ".join(diffs[:20]) if diffs else "Initial config",
+        ))
     db.commit(); db.refresh(loc)
     return loc
 
@@ -271,6 +291,32 @@ def get_location(loc_id: int,
                  user: models.User = Depends(auth.get_current_user),
                  db: Session = Depends(get_db)):
     return _owned_location(db, user, loc_id)
+
+
+@app.get("/api/locations/{loc_id}/config-history")
+def config_history(loc_id: int,
+                   user: models.User = Depends(auth.get_current_user),
+                   db: Session = Depends(get_db)):
+    _owned_location(db, user, loc_id)
+    rows = db.query(models.RuleConfigHistory).filter_by(
+        location_id=loc_id
+    ).order_by(models.RuleConfigHistory.version.desc()).all()
+    result = []
+    for r in rows:
+        changed_by_email = None
+        if r.changed_by:
+            u = db.get(models.User, r.changed_by)
+            if u:
+                changed_by_email = u.email
+        result.append({
+            "id": r.id,
+            "version": r.version,
+            "changed_at": r.changed_at.isoformat() if r.changed_at else None,
+            "changed_by": changed_by_email,
+            "diff_summary": r.diff_summary,
+            "config_snapshot": r.config_snapshot,
+        })
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +675,11 @@ async def upload_attendance_wide(
                 continue
             internal = code_map.get(vendor_code, code_map.get(vendor_code.lower(), ""))
             if not internal:
+                for vc, ic in code_map.items():
+                    if vendor_code == vc.upper():
+                        internal = ic
+                        break
+            if not internal:
                 internal = vendor_code if vendor_code in "ABCDEFG" else ""
             if not internal or internal not in "ABCDEFG":
                 skipped.append(f"Row {row_num} day {day_num}: unknown code '{vendor_code}'")
@@ -763,6 +814,20 @@ def upload_analysis(location_id: int, year: int, month: int,
 
     wb = Workbook()
 
+    # Fetch previous month's payroll for CTC comparison
+    prev_year = year if month > 1 else year - 1
+    prev_month = month - 1 if month > 1 else 12
+    prev_run = db.query(models.PayrollRun).filter_by(
+        location_id=loc.id, year=prev_year, month=prev_month
+    ).order_by(models.PayrollRun.created_at.desc()).first()
+    prev_salaries: dict[str, float] = {}
+    if prev_run:
+        for pr in prev_run.results:
+            emp_code = pr.payload.get("employee", {}).get("emp_code")
+            sal = pr.payload.get("salary", {}).get("monthly", 0)
+            if emp_code:
+                prev_salaries[emp_code] = sal
+
     # ---- Compute per-employee data ----
     emp_data = []
     for emp in employees:
@@ -784,21 +849,18 @@ def upload_analysis(location_id: int, year: int, month: int,
             "week_off_day": emp.week_off_day,
         }
 
-        # Run engine TWICE:
-        # 1) "raw" — same payable formula but rules disabled (no sandwich,
-        #    no excess-leave conversion, no week-off cap, no exit trailing)
         no_rules_cfg = dict(loc.rule_config or {})
         no_rules_cfg.update({
             "sandwich_rule": False,
             "excess_leave_to_absent": False,
             "week_off_cap_percent": 0,
             "exit_trailing_absence_unpaid": False,
+            "min_working_days": 0,
         })
         raw_payload = calculate_payroll(
             employee=emp_dict, year=year, month=month,
             records=rec_dicts, rule_config=no_rules_cfg,
         )
-        # 2) "engine" — full rules enabled
         eng_payload = calculate_payroll(
             employee=emp_dict, year=year, month=month,
             records=rec_dicts, rule_config=loc.rule_config,
@@ -821,6 +883,27 @@ def upload_analysis(location_id: int, year: int, month: int,
             else:
                 raw_codes.append("G")
 
+        # Build engine final codes from day_details
+        eng_day_details = eng_payload.get("day_details", [])
+        eng_detail_map = {dd["day"]: dd for dd in eng_day_details}
+        eng_final_codes: list[str] = []
+        cell_reasons: list[str] = []
+        for d in range(1, dm + 1):
+            dt = date(year, month, d)
+            iso = dt.isoformat()
+            if (emp.joining_date and dt < emp.joining_date) or \
+               (emp.exit_date and dt > emp.exit_date):
+                eng_final_codes.append("")
+                cell_reasons.append("")
+                continue
+            dd = eng_detail_map.get(iso)
+            if dd:
+                eng_final_codes.append(dd["final"])
+                cell_reasons.append(dd.get("reason", ""))
+            else:
+                eng_final_codes.append(raw_codes[d - 1])
+                cell_reasons.append("")
+
         raw_counts = raw_payload.get("counts", {})
         raw_payable = raw_payload.get("I_payable_days", 0)
         raw_total = raw_payload.get("H_total_days", 0)
@@ -838,6 +921,15 @@ def upload_analysis(location_id: int, year: int, month: int,
             reasons.append(note)
         for flag in eng_payload.get("flags", []):
             reasons.append(f"Flag: {flag}")
+
+        # CTC change detection
+        prev_sal = prev_salaries.get(emp.emp_code)
+        ctc_change = None
+        if prev_sal is not None and abs(prev_sal - emp.monthly_salary) > 0.01:
+            ctc_change = {"previous": prev_sal, "current": emp.monthly_salary,
+                          "diff": round(emp.monthly_salary - prev_sal, 2)}
+            reasons.append(f"CTC changed: ₹{prev_sal:,.2f} → ₹{emp.monthly_salary:,.2f} (diff: ₹{ctc_change['diff']:,.2f})")
+
         for code_name, label in [("E", "Leave"), ("G", "Absent"), ("C", "Week Off")]:
             raw_v = raw_counts.get(code_name, 0)
             eng_v = eng_counts.get(code_name, 0)
@@ -848,6 +940,8 @@ def upload_analysis(location_id: int, year: int, month: int,
         emp_data.append({
             "emp": emp,
             "raw_codes": raw_codes,
+            "eng_final_codes": eng_final_codes,
+            "cell_reasons": cell_reasons,
             "raw_counts": raw_counts,
             "raw_payable": raw_payable,
             "raw_total": raw_total,
@@ -858,6 +952,7 @@ def upload_analysis(location_id: int, year: int, month: int,
             "eng_gross": eng_gross,
             "gross_diff": gross_diff,
             "reasons": reasons,
+            "ctc_change": ctc_change,
             "raw_payload": raw_payload,
             "eng_payload": eng_payload,
         })
@@ -920,15 +1015,19 @@ def upload_analysis(location_id: int, year: int, month: int,
         ws1.column_dimensions[ws1.cell(1, ci).column_letter].width = 14
 
     # ================================================================
-    # SHEET 2: After Rules (Engine Output)
+    # SHEET 2: After Rules (Engine Output) — cell-level highlights
     # ================================================================
     ws2 = wb.create_sheet("After Rules")
+
+    changed_fill = PatternFill("solid", fgColor="FF6B6B")
+    ctc_flag_fill = PatternFill("solid", fgColor="E0B0FF")
 
     sum2_h = ["Present", "Half Present", "Week Off", "Holiday",
               "Leave", "Half Leave", "Absent", "Holiday Work",
               "Total Days", "Payable Days", "Monthly Salary", "Per Day",
               "Gross Pay (After Rules)",
-              "Gross Pay (Original)", "Gross Difference", "Change Reasons"]
+              "Gross Pay (Original)", "Gross Difference",
+              "Cell Changes", "Change Reasons"]
     headers2 = info_h + day_h + sum2_h
 
     for ci, h in enumerate(headers2, 1):
@@ -948,36 +1047,64 @@ def upload_analysis(location_id: int, year: int, month: int,
         info = [emp.emp_code, emp.name, emp.title or "", emp.gender,
                 emp.joining_date.strftime("%d-%b-%y") if emp.joining_date else "",
                 emp.exit_date.strftime("%d-%b-%y") if emp.exit_date else ""]
-        # For engine codes: we show day codes but highlight cells that changed
-        vendor_codes = [reverse_map.get(c, c) for c in ed["raw_codes"]]
+        eng_vendor_codes = [reverse_map.get(c, c) for c in ed["eng_final_codes"]]
         ec = ed["eng_counts"]
         per_day = emp.monthly_salary / dm if dm else 0
+
+        cell_change_details = []
+        for d_idx in range(dm):
+            raw_c = ed["raw_codes"][d_idx]
+            eng_c = ed["eng_final_codes"][d_idx]
+            reason = ed["cell_reasons"][d_idx]
+            if raw_c and eng_c and raw_c != eng_c:
+                raw_vc = reverse_map.get(raw_c, raw_c)
+                eng_vc = reverse_map.get(eng_c, eng_c)
+                detail = f"Day {d_idx+1}: {raw_vc}→{eng_vc}"
+                if reason:
+                    detail += f" ({reason})"
+                cell_change_details.append(detail)
+
         summary = [ec.get("A", 0), ec.get("B", 0), ec.get("C", 0), ec.get("D", 0),
                    ec.get("E", 0), ec.get("F", 0), ec.get("G", 0), ec.get("J", 0),
                    ed["eng_total"], ed["eng_payable"],
                    emp.monthly_salary, round(per_day, 2),
                    ed["eng_gross"], ed["raw_gross"], ed["gross_diff"],
+                   "; ".join(cell_change_details) if cell_change_details else "No cell changes",
                    "; ".join(ed["reasons"]) if ed["reasons"] else "No changes"]
-        row = info + vendor_codes + summary
+        row = info + eng_vendor_codes + summary
         for ci, val in enumerate(row, 1):
             c = ws2.cell(ri, ci, val)
             c.border = border
             c.font = Font(size=9)
             c.alignment = Alignment(horizontal="center")
             if len(info_h) < ci <= len(info_h) + dm:
-                internal = ed["raw_codes"][ci - len(info_h) - 1]
-                if internal in code_fills:
-                    c.fill = code_fills[internal]
-            # Highlight gross difference
-            if headers2[ci - 1] == "Gross Difference":
+                d_idx = ci - len(info_h) - 1
+                raw_c = ed["raw_codes"][d_idx] if d_idx < len(ed["raw_codes"]) else ""
+                eng_c = ed["eng_final_codes"][d_idx] if d_idx < len(ed["eng_final_codes"]) else ""
+                if raw_c and eng_c and raw_c != eng_c:
+                    c.fill = changed_fill
+                    c.font = Font(size=9, bold=True, color="FFFFFF")
+                    reason = ed["cell_reasons"][d_idx]
+                    if reason:
+                        c.comment = __import__("openpyxl").comments.Comment(reason, "Rule Engine")
+                elif eng_c in code_fills:
+                    c.fill = code_fills[eng_c]
+            if ci - 1 < len(headers2) and headers2[ci - 1] == "Gross Difference":
                 if val != 0:
                     c.fill = diff_fill
                     c.font = Font(size=9, bold=True)
                 else:
                     c.fill = ok_fill
-            if headers2[ci - 1] == "Change Reasons" and ed["reasons"]:
+            if ci - 1 < len(headers2) and headers2[ci - 1] == "Cell Changes" and cell_change_details:
+                c.fill = PatternFill("solid", fgColor="FFD7D7")
+                c.alignment = Alignment(horizontal="left", wrap_text=True)
+            if ci - 1 < len(headers2) and headers2[ci - 1] == "Change Reasons" and ed["reasons"]:
                 c.fill = PatternFill("solid", fgColor="FFF2CC")
                 c.alignment = Alignment(horizontal="left", wrap_text=True)
+        if ed.get("ctc_change"):
+            sal_col = len(info_h) + dm + 11
+            if sal_col <= len(row):
+                ws2.cell(ri, sal_col).fill = ctc_flag_fill
         for ci in range(1, len(info_h) + 1):
             ws2.cell(ri, ci).alignment = Alignment(horizontal="left")
 
@@ -987,9 +1114,9 @@ def upload_analysis(location_id: int, year: int, month: int,
         ws2.column_dimensions[ws2.cell(1, ci).column_letter].width = 4.5
     for ci in range(len(info_h) + dm + 1, len(headers2) + 1):
         ws2.column_dimensions[ws2.cell(1, ci).column_letter].width = 16
-    # Make Change Reasons column wider
-    last_col_letter = ws2.cell(1, len(headers2)).column_letter
-    ws2.column_dimensions[last_col_letter].width = 50
+    for h_name in ("Cell Changes", "Change Reasons"):
+        idx = headers2.index(h_name) + 1
+        ws2.column_dimensions[ws2.cell(1, idx).column_letter].width = 50
 
     # ================================================================
     # SHEET 3: Legend
@@ -1178,8 +1305,21 @@ def run_payroll(body: schemas.PayrollRunIn,
     last = date(body.year + (1 if body.month == 12 else 0),
                 1 if body.month == 12 else body.month + 1, 1)
 
-    # Merge declared holidays into attendance stream as D if not already recorded
     holidays = {h.day for h in db.query(models.Holiday).filter_by(location_id=loc.id).all()}
+
+    # Fetch previous month's payroll for CTC comparison
+    prev_year = body.year if body.month > 1 else body.year - 1
+    prev_month = body.month - 1 if body.month > 1 else 12
+    prev_run = db.query(models.PayrollRun).filter_by(
+        location_id=loc.id, year=prev_year, month=prev_month
+    ).order_by(models.PayrollRun.created_at.desc()).first()
+    prev_salaries: dict[str, float] = {}
+    if prev_run:
+        for pr in prev_run.results:
+            emp_code = pr.payload.get("employee", {}).get("emp_code")
+            sal = pr.payload.get("salary", {}).get("monthly", 0)
+            if emp_code:
+                prev_salaries[emp_code] = sal
 
     results = []
     for e in employees:
@@ -1206,6 +1346,18 @@ def run_payroll(body: schemas.PayrollRunIn,
             year=body.year, month=body.month, records=rec_dicts,
             rule_config=loc.rule_config,
         )
+
+        prev_sal = prev_salaries.get(e.emp_code)
+        if prev_sal is not None and abs(prev_sal - e.monthly_salary) > 0.01:
+            payload["flags"].append(
+                f"CTC_CHANGE:{prev_sal}→{e.monthly_salary}"
+            )
+            payload["notes"].append(
+                f"CTC changed from ₹{prev_sal:,.2f} to ₹{e.monthly_salary:,.2f} vs last month"
+            )
+            payload["ctc_change"] = {"previous": prev_sal, "current": e.monthly_salary,
+                                     "diff": round(e.monthly_salary - prev_sal, 2)}
+
         db.add(models.PayrollResult(run_id=run.id, employee_id=e.id, payload=payload))
         results.append(payload)
     db.commit()

@@ -94,6 +94,17 @@ class UploadBatch(Base):
     attendance_saved = Column(Integer, default=0)
 
 
+class RuleConfigHistory(Base):
+    __tablename__ = "rule_config_history"
+    id = Column(Integer, primary_key=True)
+    location_id = Column(Integer, ForeignKey("locations.id", ondelete="CASCADE"), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    changed_at = Column(DateTime, default=datetime.utcnow)
+    changed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    config_snapshot = Column(JSON, nullable=False)
+    diff_summary = Column(String, nullable=True)
+
+
 class PayrollRun(Base):
     __tablename__ = "payroll_runs"
     id = Column(Integer, primary_key=True)

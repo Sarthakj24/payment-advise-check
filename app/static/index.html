@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <title>Attendance Payroll Calculator</title>
-<link rel="stylesheet" href="/static/style.css?v=13">
+<link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 <body>
 <header>
@@ -179,6 +179,10 @@
     <button id="cfg-save">Save</button>
   </div>
   <div id="cfg-form" class="cfg-grid"></div>
+  <details><summary>Config Version History</summary>
+    <p class="hint">Shows all changes to this location's rule config, who changed it and what was modified.</p>
+    <div class="table-wrap"><table id="cfg-history-table"></table></div>
+  </details>
   <details><summary>Default config (reference)</summary><pre id="cfg-default"></pre></details>
   <details><summary>Raw JSON (advanced)</summary>
     <textarea id="cfg-json" rows="20" style="width:100%"></textarea>
@@ -213,6 +217,6 @@
   <div class="table-wrap"><table id="up-history"></table></div>
 </section>
 
-<script src="/static/app.js?v=13"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

@@ -138,6 +138,9 @@ const RULE_SCHEMA = [
     type: "bool" },
 
   { section: "Joining / Exit" },
+  { key: "min_working_days", label: "Minimum working days",
+    hint: "If employee works fewer than this many days, total pay = 0. Set 0 to disable.",
+    type: "number", step: 1, min: 0 },
   { key: "attendance_starts_on_join_date", label: "Attendance starts on joining",
     hint: "Days before joining date are ignored, not counted as absent.",
     type: "bool" },
@@ -154,9 +157,9 @@ const RULE_SCHEMA = [
     type: "number", step: 1, min: 0 },
 
   { section: "Vendor Upload Code Mapping",
-    hint: "Define what code this vendor uses in their sheet for each attendance type. Example: if the vendor marks Present as 'D', type D next to Present." },
-  { key: "_vcm.A", internal: "A", label: "Present",      hint: "Default: P",  type: "vcm", placeholder: "P" },
-  { key: "_vcm.B", internal: "B", label: "Half Present",  hint: "Default: HD", type: "vcm", placeholder: "HD" },
+    hint: "Define what code(s) this vendor uses for each attendance type. Use commas for multiple codes, e.g. 'HD, DH, DD' for Half Present." },
+  { key: "_vcm.A", internal: "A", label: "Present",      hint: "Default: P. Comma-separated for multiple.",  type: "vcm", placeholder: "P" },
+  { key: "_vcm.B", internal: "B", label: "Half Present",  hint: "Default: HD. e.g. HD, DH, DD", type: "vcm", placeholder: "HD" },
   { key: "_vcm.C", internal: "C", label: "Week Off",      hint: "Default: WO", type: "vcm", placeholder: "WO" },
   { key: "_vcm.D", internal: "D", label: "Holiday",       hint: "Default: H",  type: "vcm", placeholder: "H" },
   { key: "_vcm.E", internal: "E", label: "Leave",         hint: "Default: L",  type: "vcm", placeholder: "L" },
@@ -181,10 +184,13 @@ function _set(obj, path, val) {
 
 function renderRuleForm(container, cfg) {
   container.innerHTML = "";
-  // Build reverse vendor map for vcm fields: internal_code → vendor_code
+  // Build reverse vendor map: internal_code → [vendor_codes]
   const vcMap = cfg.vendor_code_map || {};
   const reverseVcm = {};
-  for (const [vc, ic] of Object.entries(vcMap)) reverseVcm[ic] = vc;
+  for (const [vc, ic] of Object.entries(vcMap)) {
+    if (!reverseVcm[ic]) reverseVcm[ic] = [];
+    reverseVcm[ic].push(vc);
+  }
 
   for (const item of RULE_SCHEMA) {
     if (item.section) {
@@ -199,12 +205,12 @@ function renderRuleForm(container, cfg) {
     l.innerHTML = `<b>${item.label}</b>${item.hint ? `<small>${item.hint}</small>` : ""}`;
     const v = document.createElement("div"); v.className = "cfg-value";
 
-    const cur = item.type === "vcm" ? (reverseVcm[item.internal] || "") : _get(cfg, item.key);
+    const cur = item.type === "vcm" ? ((reverseVcm[item.internal] || []).join(", ")) : _get(cfg, item.key);
     let input;
     if (item.type === "vcm") {
       input = document.createElement("input");
       input.type = "text"; input.value = cur; input.placeholder = item.placeholder || "";
-      input.style.textTransform = "uppercase"; input.style.width = "80px";
+      input.style.textTransform = "uppercase"; input.style.width = "160px";
     } else if (item.type === "select") {
       input = document.createElement("select");
       for (const [val, lab] of item.options) {
@@ -247,9 +253,13 @@ function readRuleForm(container) {
   container.querySelectorAll("[data-key]").forEach(el => {
     const k = el.dataset.key, t = el.dataset.type;
     if (t === "vcm") {
-      const vendorCode = el.value.trim().toUpperCase();
+      const raw = el.value.trim().toUpperCase();
       const internalCode = el.dataset.internal;
-      if (vendorCode) vcmEntries.push([vendorCode, internalCode]);
+      if (raw) {
+        raw.split(",").map(s => s.trim()).filter(Boolean).forEach(vc => {
+          vcmEntries.push([vc, internalCode]);
+        });
+      }
       return;
     }
     let val;
@@ -280,6 +290,7 @@ async function loadConfig() {
   const merged = _mergeConfig(_defaultConfig, loc.rule_config);
   renderRuleForm($("#cfg-form"), merged);
   $("#cfg-json").value = JSON.stringify(loc.rule_config, null, 2);
+  loadConfigHistory();
 }
 async function saveConfig() {
   const id = $("#cfg-location").value;
@@ -288,6 +299,7 @@ async function saveConfig() {
   await api(`/api/locations/${id}`, { method: "PUT", body: JSON.stringify(loc) });
   $("#cfg-json").value = JSON.stringify(loc.rule_config, null, 2);
   alert("Saved.");
+  loadConfigHistory();
 }
 async function saveConfigJSON() {
   const id = $("#cfg-location").value;
@@ -298,7 +310,36 @@ async function saveConfigJSON() {
   await api(`/api/locations/${id}`, { method: "PUT", body: JSON.stringify(loc) });
   renderRuleForm($("#cfg-form"), cfg);
   alert("Saved.");
+  loadConfigHistory();
 }
+
+async function loadConfigHistory() {
+  const id = $("#cfg-location").value;
+  if (!id || !$("#cfg-history-table")) return;
+  try {
+    const list = await api(`/api/locations/${id}/config-history`);
+    if (!list.length) {
+      $("#cfg-history-table").innerHTML = "<tr><td>No config changes recorded yet.</td></tr>";
+      return;
+    }
+    const rows = list.map(h => {
+      const dt = h.changed_at ? new Date(h.changed_at).toLocaleString() : "";
+      return `<tr>
+        <td>v${h.version}</td>
+        <td>${dt}</td>
+        <td>${h.changed_by || "—"}</td>
+        <td style="font-size:.8rem;max-width:500px;word-wrap:break-word">${h.diff_summary || "—"}</td>
+        <td><button class="secondary" onclick='viewConfigSnapshot(${JSON.stringify(h.config_snapshot).replace(/'/g, "&#39;")})'>View</button></td>
+      </tr>`;
+    });
+    $("#cfg-history-table").innerHTML = `<tr>
+      <th>Version</th><th>Changed</th><th>By</th><th>Changes</th><th></th>
+    </tr>` + rows.join("");
+  } catch (e) { /* ignore */ }
+}
+window.viewConfigSnapshot = (snapshot) => {
+  alert(JSON.stringify(snapshot, null, 2));
+};
 
 // ---------- Employees tab ----------
 async function loadEmployees() {
@@ -628,12 +669,16 @@ async function runPayroll() {
     <th>Present</th><th>Half Present</th><th>Week Off</th><th>Holiday</th>
     <th>Leave</th><th>Half Leave</th><th>Absent</th><th>Holiday Work</th>
     <th>Approved Leave</th><th>Closing Leave</th>
-    <th>Gross ₹</th><th>Flags / Notes / Checks</th>
+    <th>Gross ₹</th><th>CTC Change</th><th>Flags / Notes / Checks</th>
   </tr>`;
   const rows = r.results.map(x => {
     const flags = x.flags.map(f => `<span class="flag">${f}</span>`).join("");
     const notes = x.notes.map(n => `<span class="note">${n}</span>`).join("");
     const chks = x.checks.map(c => `<span class="${c.pass?'check-ok':'check-fail'}">${c.pass?'✓':'✗'} ${c.expr}</span>`).join("<br>");
+    const ctc = x.ctc_change
+      ? `<span class="flag">₹${x.ctc_change.previous}→₹${x.ctc_change.current}</span>`
+      : "—";
+    const grossClass = x.min_working_days_applied ? ' style="color:#dc2626;font-weight:bold"' : "";
     return `<tr>
       <td>${x.employee.emp_code}</td><td>${x.employee.title||""}</td><td>${x.employee.name}</td>
       <td>${x.H_total_days}</td><td>${x.I_payable_days}</td>
@@ -641,7 +686,8 @@ async function runPayroll() {
       <td>${x.counts.D}</td><td>${x.counts.E}</td><td>${x.counts.F}</td>
       <td>${x.counts.G}</td><td>${x.counts.J}</td>
       <td>${x.approved_leave}</td><td>${x.leave_ledger.L_closing}</td>
-      <td>${x.salary.gross_payable}</td>
+      <td${grossClass}>${x.salary.gross_payable}</td>
+      <td>${ctc}</td>
       <td>${flags}${notes}<br>${chks}</td>
     </tr>`;
   });
