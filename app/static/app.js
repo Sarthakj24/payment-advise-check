@@ -663,9 +663,9 @@ async function uploadAttendance() {
     const data = await r.json();
     if (!r.ok) { $("#up-result").textContent = "Error: " + (data.detail || JSON.stringify(data)); return; }
     let msg = `Rows processed: ${data.rows_processed}\nEmployees created: ${data.employees_created}\nAttendance saved: ${data.attendance_saved}`;
+    if (data.version) msg += `\nVersion: ${data.version}`;
     if (data.skipped && data.skipped.length) msg += "\n\nSkipped:\n" + data.skipped.join("\n");
     $("#up-result").textContent = msg;
-    if (data.version) msg += `\nVersion: ${data.version}`;
     _lastUploadParams = { location_id: $("#up-location").value, year: $("#up-year").value, month: $("#up-month").value };
     $("#up-analysis").disabled = false;
     $("#up-analysis-hint").style.display = "";
