@@ -143,6 +143,29 @@ checks, rollover vs fixed).
 
 ---
 
+## Persistence & deployment (Render)
+
+Data (rule-engine config per location + all client data — companies,
+locations, employees, attendance, payroll runs) is stored in a SQL database
+via SQLAlchemy.
+
+- **Locally**: defaults to a SQLite file (`payroll.db`) — no setup needed.
+- **On Render**: set the `DATABASE_URL` env var to a managed **Postgres**
+  connection string. `render.yaml` already provisions this: it declares a
+  `attendance-payroll-db` Postgres database and injects its connection string
+  into the web service, so data survives every deploy and restart.
+
+`app/db.py` reads `DATABASE_URL`, normalises the `postgres://` scheme Render
+hands out to `postgresql://`, and enables `pool_pre_ping` for Postgres.
+Tables are auto-created on startup; the sample ACME tenant seeds **only when
+the database is empty**, so it won't overwrite real data.
+
+To deploy: push to the connected repo (`autoDeploy: true`) or use Render's
+Blueprint from `render.yaml`. Adjust the `plan:` values for the web service
+and database to match your paid tier.
+
+---
+
 ## Project layout
 
 ```

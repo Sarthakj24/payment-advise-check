@@ -2,16 +2,24 @@ services:
   - type: web
     name: attendance-payroll
     runtime: python
-    plan: free
+    plan: starter
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: SESSION_SECRET
         generateValue: true
-    autoDeploy: true
-    disk:
-      name: data
-      mountPath: /opt/render/project/src
-      sizeGB: 1
+      # Injected from the managed Postgres database below. All rule-engine
+      # config and client data persists here across deploys and restarts.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: attendance-payroll-db
+          property: connectionString
+
+databases:
+  - name: attendance-payroll-db
+    plan: basic-256mb
+    databaseName: payroll
+    user: payroll
